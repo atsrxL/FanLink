@@ -1,0 +1,28 @@
+name: native-tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify PC console and firmware sources
+        run: make verify
+
+  platformio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install pinned PlatformIO Core
+        run: python3 -m pip install 'platformio==6.1.19'
+      - name: Build TX, RX1 and RX16 with real dependencies
+        run: pio run -d firmware -e fanlink_tx_esp8285 -e fanlink_rx_node01 -e fanlink_rx_node16

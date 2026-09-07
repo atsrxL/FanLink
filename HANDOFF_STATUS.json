@@ -1,0 +1,86 @@
+{
+  "project": "FanLink",
+  "source_repository": {
+    "url": "https://github.com/atsrxL/FanLink",
+    "branch": "main",
+    "git_setup_date": "2026-09-07",
+    "scope": "pc/ contains the FanLink Python serial console; firmware/ contains embedded code and build tools; earlier ELRS Node.js console excluded",
+    "desktop_validation": "make verify PASS: 269 native checks and 20 panel tests, CLI, syntax and source manifest",
+    "clean_platformio_validation": "PASS: TX/RX01/RX16 after directory migration; SHA-256 readback matched",
+    "local_build_evidence": "firmware/dist/20260907-git-layout; SOURCE_MANIFEST.build-input.sha256 preserves the build input before final documentation-only updates",
+    "generated_artifacts": "Retained locally and excluded from Git",
+    "hardware_state_note": "Hardware fields below are a 2026-09-04 historical snapshot; no device state was rechecked for Git publication"
+  },
+  "version": "0.1.3-dev",
+  "release_state": "Unreleased working tree",
+  "handoff_date": "2026-09-04",
+  "status": "Requested source changes and all offline/real-dependency build gates pass; 0.1.3 firmware is not yet flashed",
+  "wire_protocol_version": 1,
+  "control_packet_bytes": 30,
+  "rpm_packet_bytes": 30,
+  "host_serial_protocol_version": 1,
+  "host_link_metrics": {
+    "message_type": "0x82",
+    "payload_bytes": 32,
+    "node_layout": ["uplink_rssi_dbm_int8", "downlink_rssi_dbm_int8"],
+    "unknown_value": -127,
+    "status_snapshot_0x80_unchanged": true
+  },
+  "targets": {
+    "tx": {
+      "product": "JHEMCU 2.4GHz Lite RX hardware repurposed as FanLink TX",
+      "radio_setting_dbm": 13,
+      "estimated_chip_power_mw": 20,
+      "true_25mw_supported": false,
+      "reason": "bare SX1280 and target/RadioLib maximum"
+    },
+    "rx": {
+      "product": "BETAFPV 2.4GHz Nano RX",
+      "radio_drive_dbm": -6,
+      "official_pa_power_step_mw": 25,
+      "rxen_gpio": 9,
+      "txen_gpio": 10
+    },
+    "node01_override": {
+      "pwm_gpio": 3,
+      "tach_gpio": 1,
+      "gate_active_high": false,
+      "logical_duty_zero": "stop request",
+      "logical_duty_255": "full-speed request"
+    },
+    "nodes02_to_16_unchanged": true,
+    "pcb_revisions_verified": false
+  },
+  "current_source_validation": {
+    "native_cpp": "PASS: 269 checks",
+    "native_asan_ubsan": "PASS: 269 checks; leak detection disabled on macOS runtime",
+    "control_panel_unittest": "PASS: 20 tests",
+    "cli_self_test_normal_and_optimized": "PASS",
+    "python_compile": "PASS",
+    "javascript_syntax": "PASS",
+    "firmware_stub_syntax_smoke": "PASS",
+    "cmake_ctest": "PASS: 1/1",
+    "source_manifest_and_make_verify": "PASS",
+    "clean_platformio": "PASS: TX/RX01/RX16",
+    "build_evidence": "dist/20260904-v0.1.3-25mw-node01-rssi-reviewed",
+    "evidence_note": "docs/evidence/20260904-v013-power-node01-rssi.md"
+  },
+  "currently_flashed_hardware_version": "0.1.2",
+  "hardware_observed": [
+    "TX Host serial connection and watchdog state",
+    "RX link LED steady while linked",
+    "Node 01 duty control effective",
+    "Node 01 RPM/status replies fresh",
+    "old image logical duty 0 still produced about 2787 RPM, proving physical polarity mismatch"
+  ],
+  "new_0_1_3_hardware_verified": false,
+  "next_action": "Put BETAFPV RX Node 01 in ESP8266 ROM BOOT and flash the reviewed 0.1.3 RX01 image; verify LED, duty endpoints and RPM before updating TX",
+  "p0_blockers": [
+    "0.1.3 TX and RX01 have not been flashed or application-accepted",
+    "JHEMCU bare SX1280 cannot produce a true 25 mW output",
+    "RF power/EIRP not measured",
+    "Node 01 PWM/Tach pins, polarity endpoints and 25 kHz waveform not measured",
+    "new separate uplink/downlink RSSI path not hardware-verified",
+    "Tach electrical level/RPM calibration and long-run thermal safety not measured"
+  ]
+}

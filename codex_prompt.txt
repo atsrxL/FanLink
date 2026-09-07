@@ -1,0 +1,44 @@
+You are taking over a firmware repository named FanLink.
+
+First read, in order:
+1. AGENTS.md
+2. REQUIREMENTS.md
+3. COMMUNICATION_REQUIREMENTS.md
+4. HANDOFF_TO_CODEX.md
+5. PROTOCOL.md
+6. HARDWARE.md
+7. SAFETY.md
+8. TASKS.md
+
+Then run:
+
+./firmware/scripts/run_native_tests.sh
+python3 pc/tools/fanlink_cli.py --self-test
+python3 -m unittest discover -s pc/tests -p 'test_fanlink_panel.py' -v
+python3 -m py_compile pc/tools/*.py firmware/tools/*.py firmware/scripts/*.py pc/tests/test_fanlink_panel.py
+node --check pc/panel/app.js
+./firmware/tools/run_firmware_syntax_smoke.sh
+make verify
+
+The only required product behavior is:
+- one TX broadcasts all 16 duty bytes every slot;
+- TX cycles poll_id from 1 through 16;
+- RX node X applies only duty[X-1] as a 25 kHz four-wire fan command;
+- RX node X transmits RPM only when poll_id == X;
+- any uncertain, reset, host-loss or link-loss state biases the fan to full speed.
+
+Protocol v1 uses fixed 30-byte Control packets and fixed 30-byte RPM Reply packets. Do not change the wire format, CRC, polling model, or fail-safe behavior merely to make a driver compile. Do not import the complete ExpressLRS application stack. Do not add TX-embedded Wi-Fi/WebUI, Lua, MSP, OTA, generic RC channels, generic telemetry, dynamic power, or node discovery. A loopback-only Host browser panel already exists in pc/tools/fanlink_panel.py and pc/panel/; keep it local and preserve its fail-closed behavior.
+
+The current Unreleased/0.1.3-dev package has passed 269 native C++ checks under normal and ASan/UBSan builds, 20 panel tests, normal and optimized Python host self-tests, Python/JavaScript syntax checks, the stub-only Arduino/RadioLib syntax smoke, CMake/CTest, source-manifest verification and make verify. It has a provenance-bound clean PlatformIO TX/RX01/RX16 build at dist/20260904-v0.1.3-25mw-node01-rssi-reviewed/. This is compilation evidence for the new images, not flash or hardware acceptance.
+
+The currently flashed 0.1.2 JHEMCU TX and BETAFPV Node 01 have partial physical evidence: Host status, steady RX link LED, effective duty control and fresh RPM replies. The old image also proved the physical duty polarity is reversed. The 0.1.3 source keeps the JHEMCU bare SX1280 at its +13 dBm ceiling (about 20 mW), selects the BETAFPV PA's 25 mW step, swaps Node 01 PWM/Tach to GPIO3/GPIO1, corrects only its gate polarity, and adds Host 0x82 separate uplink/downlink RSSI. None of those new-image behaviors is flashed or hardware-verified. Keep the fan/electrical path safe until HARDWARE.md and SAFETY.md checks are complete.
+
+Your first milestone is:
+1. put BETAFPV RX Node 01 in ROM BOOT, flash the reviewed 0.1.3 RX01 image and verify LED, GPIO3 PWM/GPIO1 Tach, duty endpoints and RPM;
+2. flash the reviewed 0.1.3 TX image and verify the old Host frames plus both 0x82 RSSI columns;
+3. capture exact 200 ms keepalive and stop-to-failsafe timing and verify USB-I/O/reconnect fail-closed behavior;
+4. measure RF output/PER/turnaround, scope 25 kHz PWM and verify all fail-safe and thermal paths.
+
+When hardware data is truly required, ask once for the exact brand/model/PCB revision, photos or schematic/ELRS target, RF-front-end truth table, fan interface circuit and measured Tach voltage. Continue all non-hardware work while waiting.
+
+Report using COMMUNICATION_REQUIREMENTS.md. Update HANDOFF_STATUS.md, HANDOFF_STATUS.json and CHANGELOG.md before handing work back. Never describe a stub compile as hardware-ready.

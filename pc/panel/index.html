@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#071116" />
+    <title>FanLink TX 控制面板</title>
+    <link rel="stylesheet" href="./app.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="topbar">
+      <div class="brand" aria-label="FanLink TX">
+        <span class="brand-mark" aria-hidden="true">FL</span>
+        <span>
+          <strong>FanLink</strong>
+          <small>TX CONTROL / LOCAL</small>
+        </span>
+      </div>
+
+      <div class="connection-bar" aria-label="串口连接">
+        <span class="connection-state" id="connectionState" data-state="loading">
+          <span class="state-dot" aria-hidden="true"></span>
+          <span id="connectionStateText">正在读取状态</span>
+        </span>
+
+        <label class="port-field" for="portSelect">
+          <span>串口</span>
+          <select id="portSelect" aria-describedby="portHint">
+            <option value="">正在扫描…</option>
+          </select>
+        </label>
+        <span class="sr-only" id="portHint">选择连接 FanLink TX 的本地串口</span>
+
+        <button class="button button-primary" id="connectButton" type="button">连接</button>
+        <button class="button button-ghost" id="disconnectButton" type="button" hidden>断开</button>
+      </div>
+    </header>
+
+    <main id="main-content" class="page-shell">
+      <div class="notice" id="notice" data-tone="warning" role="status" aria-live="polite">
+        <span class="notice-icon" aria-hidden="true">!</span>
+        <span id="noticeText">正在连接本地控制服务。控制不可用时，风扇应由 TX/RX failsafe 转入全速。</span>
+      </div>
+
+      <section class="hero" aria-labelledby="pageTitle">
+        <div>
+          <p class="eyebrow">LOCAL FAN BUS · 16 NODES</p>
+          <h1 id="pageTitle">16 路散热状态，一眼掌握。</h1>
+          <p class="hero-copy">
+            duty 是发送给风扇 PWM 的<strong>开环命令</strong>；RPM 是节点回传的实际转速，
+            面板不会依据 RPM 自动修正 duty。
+          </p>
+        </div>
+        <div class="hero-readout" aria-label="当前连接摘要">
+          <span>当前端口</span>
+          <strong id="activePort">未连接</strong>
+          <small id="lastUpdated">尚未收到状态</small>
+        </div>
+      </section>
+
+      <section class="metrics-grid" aria-label="TX 状态概览">
+        <article class="metric-card" id="failsafeCard" data-level="unknown">
+          <span class="metric-label">TX HOST FAILSAFE</span>
+          <strong class="metric-value" id="failsafeValue">未知</strong>
+          <small id="failsafeDetail">等待状态快照</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">在线节点</span>
+          <strong class="metric-value"><span id="onlineCount">—</span><span class="metric-unit"> / 16</span></strong>
+          <small id="onlineDetail">遥测在线判定</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">TX 运行时间</span>
+          <strong class="metric-value metric-mono" id="uptimeValue">—</strong>
+          <small>来自最近状态快照</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">下一轮询节点</span>
+          <strong class="metric-value" id="nextPollValue">—</strong>
+          <small>节点 ID 1–16</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">状态帧年龄</span>
+          <strong class="metric-value metric-mono" id="frameAgeValue">—</strong>
+          <small>距后端最后收到 TX 快照</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">解析拒绝</span>
+          <strong class="metric-value metric-mono" id="parserRejectedValue">—</strong>
+          <small>累计被解析器拒绝的串口帧</small>
+        </article>
+      </section>
+
+      <section class="control-section panel-card" aria-labelledby="globalControlTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">GLOBAL COMMAND</p>
+            <h2 id="globalControlTitle">全局 duty</h2>
+            <p>先选择目标值，再明确应用到全部 16 个节点。数值范围为 0–255。</p>
+          </div>
+          <span class="safety-chip">失控默认全速</span>
+        </div>
+
+        <div class="global-controls">
+          <form class="duty-form" id="allDutyForm">
+            <div class="duty-form-label">
+              <label for="allDutyRange">全部节点开环设定</label>
+              <output id="allDutyPercent" for="allDutyRange allDutyNumber">100%</output>
+            </div>
+            <div class="duty-control-row">
+              <input id="allDutyRange" type="range" min="0" max="255" value="255" />
+              <input
+                id="allDutyNumber"
+                class="number-input"
+                type="number"
+                min="0"
+                max="255"
+                inputmode="numeric"
+                value="255"
+                aria-label="全部节点 duty 数值"
+              />
+              <button class="button button-primary apply-all" type="submit">应用到全部</button>
+            </div>
+          </form>
+
+          <div class="emergency-block">
+            <div>
+              <strong>需要立即释放 PWM 控制？</strong>
+              <span>直接发送全速命令 255，不弹出二次确认。</span>
+            </div>
+            <button class="button button-danger" id="fullSpeedButton" type="button">
+              <span aria-hidden="true">↗</span>
+              紧急全速 255
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="insight-grid" aria-label="诊断与安全说明">
+        <article class="panel-card diagnostic-card">
+          <div class="section-heading compact">
+            <div>
+              <p class="eyebrow">RADIO HEALTH</p>
+              <h2>射频诊断</h2>
+            </div>
+            <span class="diagnostic-headline" id="diagnosticHeadline">暂无数据</span>
+          </div>
+          <dl class="diagnostic-list" id="diagnosticList">
+            <div>
+              <dt>状态</dt>
+              <dd>等待后端诊断</dd>
+            </div>
+          </dl>
+        </article>
+
+        <aside class="panel-card safety-card">
+          <p class="eyebrow">SAFETY BOUNDARY</p>
+          <h2>显示不是物理验收</h2>
+          <p>
+            “已发送”只表示本地 API 接受命令；在线、RPM 和实际 duty 均来自最近一次节点回传。
+            串口断开后面板不再发送控制，TX 应在 watchdog 到期后广播全速。
+          </p>
+          <div class="safety-rule">
+            <span aria-hidden="true"></span>
+            <strong>关键散热设备仍应保留独立温度保护。</strong>
+          </div>
+        </aside>
+      </section>
+
+      <section class="nodes-section panel-card" aria-labelledby="nodesTitle">
+        <div class="section-heading nodes-heading">
+          <div>
+            <p class="eyebrow">NODE TELEMETRY</p>
+            <h2 id="nodesTitle">节点状态与开环设定</h2>
+            <p>滑块拖动时只预览；松开滑块或确认数字输入后才发送该节点命令。</p>
+          </div>
+          <div class="legend" aria-label="节点状态图例">
+            <span><i class="legend-dot online"></i>在线</span>
+            <span><i class="legend-dot stale"></i>离线 / 陈旧</span>
+            <span><i class="legend-dot fault"></i>异常位</span>
+          </div>
+        </div>
+
+        <div class="table-shell">
+          <table class="nodes-table">
+            <caption class="sr-only">FanLink 16 个节点的遥测及 duty 控制</caption>
+            <thead>
+              <tr>
+                <th scope="col">节点</th>
+                <th scope="col">RPM 回传</th>
+                <th scope="col">上行 RSSI</th>
+                <th scope="col">下行 RSSI</th>
+                <th scope="col">设定 duty</th>
+                <th scope="col">实际 duty</th>
+                <th scope="col">回传年龄</th>
+                <th scope="col">Miss</th>
+                <th scope="col">状态位</th>
+              </tr>
+            </thead>
+            <tbody id="nodeRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>FanLink TX 本地面板</span>
+      <span><i class="footer-pulse" aria-hidden="true"></i>状态轮询 250 ms</span>
+    </footer>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+    <template id="nodeRowTemplate">
+      <tr class="node-row">
+        <th scope="row" class="node-identity">
+          <span class="node-presence" aria-hidden="true"></span>
+          <span>
+            <strong class="node-name">节点 —</strong>
+            <small class="node-online-text">尚无遥测</small>
+          </span>
+        </th>
+        <td data-label="RPM 回传">
+          <strong class="rpm-value metric-mono">—</strong>
+          <small class="cell-hint">转 / 分钟</small>
+        </td>
+        <td data-label="上行 RSSI" class="rssi-cell">
+          <strong class="uplink-rssi-value rssi-value metric-mono">—</strong>
+          <small class="cell-hint">RX → TX · dBm</small>
+        </td>
+        <td data-label="下行 RSSI" class="rssi-cell">
+          <strong class="downlink-rssi-value rssi-value metric-mono">—</strong>
+          <small class="cell-hint">TX → RX · dBm</small>
+        </td>
+        <td data-label="设定 duty" class="node-duty-cell">
+          <div class="node-duty-control">
+            <input class="node-duty-range" type="range" min="0" max="255" value="255" />
+            <input
+              class="number-input node-duty-number"
+              type="number"
+              min="0"
+              max="255"
+              inputmode="numeric"
+              value="255"
+            />
+          </div>
+          <small class="node-duty-meta"><span class="node-duty-percent">100%</span><span class="node-save-state">开环命令</span></small>
+        </td>
+        <td data-label="实际 duty">
+          <div class="duty-readback">
+            <strong class="applied-duty metric-mono">—</strong>
+            <span class="mini-meter" aria-hidden="true"><i></i></span>
+          </div>
+        </td>
+        <td data-label="回传年龄"><span class="age-value metric-mono">—</span></td>
+        <td data-label="Miss"><span class="missed-value metric-mono">—</span></td>
+        <td data-label="状态位"><div class="status-tags"></div></td>
+      </tr>
+    </template>
+  </body>
+</html>
