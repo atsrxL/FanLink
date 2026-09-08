@@ -22,6 +22,7 @@ class Esp8266FanOutput final : public IFanOutput {
   bool gateActiveHigh_;
   std::uint8_t appliedDuty_{255U};
   bool initialized_{false};
+  bool outputApplied_{false};
 };
 
 }  // namespace fanlink::platform::esp8266

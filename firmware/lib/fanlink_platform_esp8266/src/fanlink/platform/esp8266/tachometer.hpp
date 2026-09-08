@@ -24,6 +24,8 @@ class Esp8266Tachometer final : public ITachometer {
  private:
   static void IRAM_ATTR interruptThunk();
   void IRAM_ATTR onFallingEdge();
+  void processEdge(std::uint32_t edgeUs);
+  void resetEstimate();
 
   static Esp8266Tachometer* instance_;
   int pin_;
@@ -31,8 +33,23 @@ class Esp8266Tachometer final : public ITachometer {
   std::uint32_t timeoutUs_;
   std::uint32_t minimumEdgeUs_;
   std::uint32_t maximumRpm_;
-  volatile std::uint32_t lastEdgeUs_{0};
-  volatile std::uint32_t periodUs_{0};
+  static constexpr std::uint8_t kQueueSize = 32U;
+  static constexpr std::uint8_t kPeriodCount = 5U;
+  volatile std::uint32_t edges_[kQueueSize]{};
+  volatile std::uint8_t writeIndex_{0};
+  volatile std::uint8_t readIndex_{0};
+  volatile bool overflow_{false};
+  std::uint32_t minimumPeriodUs_{0};
+  std::uint32_t lastRawEdgeUs_{0};
+  std::uint32_t anchorUs_{0};
+  std::uint32_t lastTrustedEdgeUs_{0};
+  std::uint32_t periods_[kPeriodCount]{};
+  std::uint8_t periodCount_{0};
+  std::uint8_t periodIndex_{0};
+  std::uint16_t rpm_{0};
+  bool haveRawEdge_{false};
+  bool haveAnchor_{false};
+  bool haveEstimate_{false};
   bool initialized_{false};
 };
 

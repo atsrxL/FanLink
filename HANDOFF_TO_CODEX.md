@@ -1,4 +1,47 @@
+> 当前最高优先契约（2026-09-08，ADR-025）：原生 8 槽 Host v2。所有串口
+> 外层 frame VERSION=2，SET_ALL/STATUS/METRICS payload 为 8/54/16 bytes；
+> 删除 wire16、补齐、截断和双栈。帧头 8B、CRC 2B、MAX_PAYLOAD 128B 保留。
+> RF v1 仍固定 30B：Control 8 duty + 8 reserved=255，不是 16 通道。RF OTA/
+> 设置字节、125ms 八节点轮询、500ms watchdog、5miss/6s presence 和 2.5s
+> freshness 均保留。TX/C6/PC 要协调升级；新 v2 工具不能与旧 v1 TX 交互，
+> 旧 TX 仅用归档 v1 工具迁移或另行授权有线 ROM 写入。RX 无需立即刷。
+> 本轮不刷设备/部署 C6；下面的旧版本构建、现场和刷写计划均为归档，不是
+> 当前版本证据或操作授权。新版验证结果以本轮证据为准，不能沿用旧 PASS。
+
+> ADR-023 历史能力状态（其 wire16 决定已被 ADR-025 替代）：0.2.0-dev，用户确认 8 RX、125ms 轮询、TX/RX OTA 和持久化
+> 功率/引脚模式；实现与 clean 四目标编译完成，未刷写、未部署 C6。
+> 详见 `docs/CAPABILITIES.md` 和 `docs/evidence/20260908-eight-node-capabilities.md`。
+> 以下旧状态仅作历史，不得据此推断当次刷机授权或现场已具有新功能。
+
+> 2026-09-08 用户明确授权新增 RX 射频 OTA。当前 0.1.8-dev 候选保留既有控制协议，
+> 增加独立维护升级通道；历史 OTA 非目标对本功能已被本次授权替代。使用与边界见
+> `docs/OTA.md`、`docs/OTA_WIRE.md` 和 ADR-018。未刷写实机。
+> 原任务现已完成本地真实依赖编译3/3和产物身份/空间检查，批次
+> `firmware/dist/20260908-rf-ota/`；精确SHA与边界见本次OTA evidence。
+
+> 2026-09-08 TX 本地升级/重启/软件 BOOT 开发授权见 ADR-020；
+> 当前实际两端仍为 0.1.9，新增 0.1.10 功能未刷写，见 `docs/TX_UPDATE.md`。
+
 # FanLink → Codex Hand-off
+
+> 当前优先状态（2026-09-08）：0.1.7-dev仅修复RX测速，实际类19场景、make verify、
+> clean TX/RX01/RX16编译已通过，尚未刷写。新批次与边界见
+> `docs/evidence/20260908-tach-filter.md`。当前TX已换成BETAFPV Lite并写入0.1.6，
+> 用户报告断联减少，但C6确认RPM仍严重跳变。以下旧状态仅为历史记录。
+
+> 当前优先状态（2026-09-07）：0.1.6-dev 是未刷写候选，TX/RX 软件截止、剩余
+> 回复延迟及 sync-only 接收状态修复已经回归验证。联合证据与现场步骤见
+> `docs/evidence/20260907-supervised-radio-solution.md`。设备写入仍是 0.1.5-dev；
+> 不能把以下旧“只调查/下一步刷机”段落作为当前权限或稳定性结论。C6 候选独立管理，
+> 本轮不 OTA。任何实际刷写需要用户最新 BOOT/目标确认，不读 Flash、不自动 reset。
+
+> 最新状态（2026-09-07）：`0.1.5-dev` 优化跨等待接收盲区、重复 PWM 写入与
+> 每节点诊断，详见 `HANDOFF_STATUS.md` 和 `docs/evidence/20260907-link-timing.md`。
+> TX 和 RX01 随后已分别获授权直接 ROM 写入同批 0.1.5-dev，未预读/读回或发送 run/reset。
+> 用户报告控制有效但没有回传，目前只调查原因，未通过双向 RF/长期验收；最新刷写证据见
+> `docs/evidence/20260907-rx-ssh-flash.md`。C6 原任务曾另获授权 OTA，本次 TX/RX 刷写未改 C6。
+> 以下是 2026-09-04
+> 历史交接基线，旧版“下一步刷机”不构成新的刷写授权，也不代表当前实机版本。
 
 交接日期：2026-09-04  
 当前工作树：Unreleased / `0.1.3-dev`  
@@ -12,8 +55,8 @@ PlatformIO 3/3 编译并生成可追溯产物；这些新功能仍未刷写和�
 用户要的是一个极简专用无线风扇总线，而不是删减到难以维护的完整 ELRS fork：
 
 ```text
-TX 每个时隙广播 duty[1..16]，并循环 poll_id=1..16
-RX X 只应用 duty[X] 的 25 kHz PWM
+TX 每 125ms 广播 duty[0..7]，并循环 poll_id=1..8（一秒一轮）
+RX X 在 PWM 模式只应用 duty[X-1] 的 25 kHz PWM
 RX X 只有在 poll_id=X 时回传 RPM
 所有异常默认全速
 ```
@@ -29,8 +72,8 @@ RX X 只有在 poll_id=X 时回传 RPM
 
 - CRC-16/CCITT-FALSE；
 - 固定 30 字节 Control/RPM 包编解码；
-- 固定帧头二进制 Host 协议，保留状态帧并新增独立上下行 RSSI 帧；
-- TX 16 通道、poll、host watchdog、遥测表；
+- 固定 8B 帧头 Host v2 协议，SET_ALL/STATUS/METRICS payload 为 8/54/16B；
+- TX 8 通道、125ms poll、500ms host watchdog、8 节点遥测表；
 - RX 通道选择、序号排序、link watchdog、堵转状态、按需回复；
 - `IRadioPort`、`IClock`、`IFanOutput`、`ITachometer` 平台边界。
 
@@ -49,7 +92,7 @@ RX X 只有在 poll_id=X 时回传 RPM
 ### 2.3 Arduino 入口
 
 - `firmware/src/main_tx.cpp`：Host 帧解析、TX 时隙循环、状态快照；
-- `firmware/src/main_rx.cpp`：单节点 RX，无 Serial 初始化，避免占用 GPIO1/3。
+- `firmware/src/main_rx.cpp`：单节点 RX，按持久化 uart/pwm/pwmswap 角色初始化；UART 模式不控制风扇。
 
 ### 2.4 工具与测试
 
@@ -59,7 +102,7 @@ RX X 只有在 poll_id=X 时回传 RPM
 - `pc/tools/fanlink_panel.py` + `pc/panel/`：仅本地监听的 TX 浏览器控制面板；
 - `pc/tests/test_fanlink_panel.py`：fake-serial、demo 和 HTTP/API 离线测试；
 - `firmware/tools/build_firmware.py`：PlatformIO 逐目标 clean 构建，以唯一批次收集 `.bin`、日志、依赖和 SHA-256；
-- `firmware/tools/simulate_cluster.py`：16 节点轮询计数模型；
+- `firmware/tools/simulate_cluster.py`：8 节点轮询计数模型；
 - `firmware/tools/network_id.py`：从短语生成可重复 network ID，非安全机制。
 
 ## 3. 已归档的 `0.1.1` 检查
@@ -151,20 +194,20 @@ Unreleased 工作树。该历史测试覆盖了：
 ## 5. 关键设计决定
 
 1. **独立 FanLink 协议，不复制 ELRS 源码。**
-2. **每包完整 duty[16]。** 下行无需确认或增量恢复。
+2. **每包完整 duty[8]。** 下行无需确认或增量恢复；RF 另有 8 个发送 255 的 reserved 字节。
 3. **显式单节点 poll。** 同一时隙只有一个合法回复者。
 4. **上下行都固定 30 字节。** 简化所有节点的固定长度接收。
-5. **二进制 Host 协议。** CRSF 暂不实现；将来只能作为适配器。
+5. **原生八槽 Host v2 协议。** 不兼容旧 16 槽；CRSF 暂不实现，将来只能作为独立适配器。
 6. **固定频点优先。** 先解决板级 RF 闭环，再单独设计 rendezvous/FHSS。
 7. **异常全速。** 软件 watchdog 与开漏硬件默认状态共同保证。
 8. **有界阻塞 RadioLib 作为 bring-up 基线。** SPI/BUSY/TX_DONE
-   硬上限为 25 ms；实测证明 10 ms 时隙不足时再仅替换适配层。
+   硬上限为 25 ms；若实测 125 ms 时隙内的收发切换不满足要求，再评估替换适配层。
 9. **控制面板 duty 是开环命令。** `255` 表示释放外部开漏级并请求全速；RPM
    只是 Tach 遥测，不把 duty 伪装成闭环转速目标。
 
 完整理由见 `docs/DECISIONS.md`。
 
-## 6. 已完成的真实依赖嵌入式构建
+## 6. 历史真实依赖嵌入式构建（不是 Host v2 证据）
 
 当前 `0.1.3-dev` 同源码 clean 批次：
 
@@ -180,7 +223,8 @@ fanlink_rx_node16.bin
 不同 clean 批次可能包含不同构建元数据。该结果不证明任何镜像已刷入或运行。
 
 只对应 `0.1.1` 历史基线的可复核 clean 批次位于
-`dist/20260904-jhemcu-lite-betafpv-nano-reviewed/`。重建命令：
+`dist/20260904-jhemcu-lite-betafpv-nano-reviewed/`。以下命令仅用于归档旧源码，
+当前构建入口见 README，RX 最大为 8，不能在当前工作树请求 RX16：
 
 ```bash
 PLATFORMIO_CORE_DIR=/tmp/fanlink-pio-core \
@@ -205,9 +249,10 @@ PLATFORMIO_CORE_DIR=/tmp/fanlink-pio-core \
 - `receive(data, len, timeout)` 的 timeout 单位和固定长度行为；
 - `setRfSwitchPins` 是否足以覆盖目标板前端。
 
-## 7. 当前第一优先级：刷入 RX01，再刷 TX 验收双向 RSSI
+## 7. 历史刷写计划（已失效，不是当前优先级或授权）
 
-保持风扇断开，按 `docs/CONTROL_PANEL.md` 继续补齐：
+以下保留原计划作为历史上下文，不执行；本轮 Host v2 迁移边界见页首。
+当时计划保持风扇断开，按 `docs/CONTROL_PANEL.md` 补齐：
 
 1. 让 BETAFPV RX Node 01 进 ESP8266 ROM BOOT，刷当前 final RX01 bin；
 2. 重启后确认 GPIO16、GPIO3 PWM、GPIO1 Tach，并实测 duty 0/255 方向与 RPM；
@@ -261,7 +306,7 @@ GPIO1/GPIO3 与 USB-UART/板载器件
 - 缺失节点只增加 missed poll，不延迟下一时隙；
 - 轮询周期、状态快照和 Host 串口输出不会破坏时隙；
 - 重复 node ID 的碰撞现象被记录；
-- 至少 4 节点通过后再扩展到 16。
+- 至少 4 节点通过后再扩展到 8。
 
 ## 11. 安全关键事项
 

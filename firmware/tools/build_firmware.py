@@ -23,6 +23,8 @@ DIST = ROOT / "dist"
 
 
 def environment_for_rx(node: int) -> str:
+    if not 1 <= node <= 8:
+        raise ValueError("RX node must be 1..8")
     return f"fanlink_rx_node{node:02d}"
 
 
@@ -73,9 +75,11 @@ def run_logged(command: list[str], log) -> None:
 
 
 def target_for_environment(name: str) -> str:
+    if name == "fanlink_rx_node02_uart_diag":
+        return "BETAFPV 2.4GHz Lite RX node02; default UART pads, runtime pin modes and RF OTA"
     if name == "fanlink_tx_esp8285":
-        return "JHEMCU 2.4GHz Lite RX hardware, repurposed as FanLink TX"
-    return "BETAFPV 2.4GHz Nano RX"
+        return "Generic 2400 Lite RX hardware as FanLink TX (current BETAFPV Lite; original JHEMCU Lite)"
+    return "BETAFPV 2.4GHz Lite RX"
 
 
 def build_environment(pio: list[str], name: str, staging: Path) -> dict[str, object]:
@@ -115,11 +119,13 @@ def parse_args() -> argparse.Namespace:
         "--rx",
         type=int,
         action="append",
-        choices=range(1, 17),
+        choices=range(1, 9),
         metavar="NODE",
         help="build one RX node; may be repeated",
     )
-    parser.add_argument("--all-rx", action="store_true", help="build RX nodes 1..16")
+    parser.add_argument("--all-rx", action="store_true", help="build RX nodes 1..8")
+    parser.add_argument("--rx2-uart-diag", action="store_true",
+                        help="build node02 with default UART pads, runtime pin modes and RF OTA")
     parser.add_argument(
         "--run-id",
         help=(
@@ -142,9 +148,11 @@ def main() -> int:
     )
 
     environments: list[str] = []
+    if args.rx2_uart_diag:
+        environments.append("fanlink_rx_node02_uart_diag")
     if args.tx:
         environments.append("fanlink_tx_esp8285")
-    nodes = list(range(1, 17)) if args.all_rx else (args.rx or [])
+    nodes = list(range(1, 9)) if args.all_rx else (args.rx or [])
     environments.extend(environment_for_rx(node) for node in nodes)
     environments = list(dict.fromkeys(environments))
     if not environments:

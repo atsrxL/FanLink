@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from typing import Iterable, Iterator, Optional, Sequence
 
 MAGIC = b"FL"
-VERSION = 1
+VERSION = 2
 MAX_PAYLOAD = 128
+NODE_COUNT = 8
+STATUS_PAYLOAD_SIZE = 6 + NODE_COUNT * 6
 
 SET_ALL_DUTY = 0x01
 SET_ONE_DUTY = 0x02
@@ -26,7 +28,7 @@ STATUS_SNAPSHOT = 0x80
 ERROR_EVENT = 0x81
 LINK_METRICS_SNAPSHOT = 0x82
 
-LINK_METRICS_PAYLOAD_SIZE = 32
+LINK_METRICS_PAYLOAD_SIZE = NODE_COUNT * 2
 RSSI_UNKNOWN = -127
 
 
@@ -136,13 +138,15 @@ class LinkMetricsSnapshot:
 
 
 def decode_status_snapshot(payload: bytes) -> StatusSnapshot:
-    if len(payload) != 102:
-        raise FanLinkError(f"STATUS_SNAPSHOT length is {len(payload)}, expected 102")
+    if len(payload) != STATUS_PAYLOAD_SIZE:
+        raise FanLinkError(
+            f"STATUS_SNAPSHOT length is {len(payload)}, expected {STATUS_PAYLOAD_SIZE}"
+        )
     flags = payload[0]
     next_poll_id = payload[1]
     uptime_seconds = struct.unpack_from("<I", payload, 2)[0]
     nodes = []
-    for index in range(16):
+    for index in range(NODE_COUNT):
         offset = 6 + index * 6
         rpm = struct.unpack_from("<H", payload, offset)[0]
         nodes.append(
@@ -165,7 +169,7 @@ def decode_link_metrics_snapshot(payload: bytes) -> LinkMetricsSnapshot:
             f"expected {LINK_METRICS_PAYLOAD_SIZE}"
         )
     nodes = []
-    for index in range(16):
+    for index in range(NODE_COUNT):
         uplink_rssi_dbm, downlink_rssi_dbm = struct.unpack_from("<bb", payload, index * 2)
         nodes.append(
             NodeLinkMetrics(
@@ -212,8 +216,8 @@ def check_byte(value: int, name: str) -> int:
 
 
 def check_node(value: int) -> int:
-    if not 1 <= value <= 16:
-        raise FanLinkError(f"node must be 1..16, got {value}")
+    if not 1 <= value <= NODE_COUNT:
+        raise FanLinkError(f"node must be 1..8, got {value}")
     return value
 
 
@@ -263,11 +267,11 @@ def command_payload(args: argparse.Namespace) -> tuple[int, bytes]:
     if args.command == "set":
         return SET_ONE_DUTY, bytes((check_node(args.node), check_byte(args.duty, "duty")))
     if args.command == "set-list":
-        if len(args.values) != 16:
-            raise FanLinkError("set-list requires exactly 16 values")
+        if len(args.values) != NODE_COUNT:
+            raise FanLinkError("set-list requires exactly 8 values")
         return SET_ALL_DUTY, bytes(check_byte(v, "duty") for v in args.values)
     if args.command == "full":
-        return SET_ALL_DUTY, bytes([255] * 16)
+        return SET_ALL_DUTY, bytes([255] * NODE_COUNT)
     if args.command == "heartbeat":
         return HEARTBEAT, b""
     raise FanLinkError(f"command {args.command!r} has no one-shot payload")
@@ -289,9 +293,9 @@ def run_monitor(args: argparse.Namespace) -> None:
 def hold_values(args: argparse.Namespace) -> bytes:
     if args.all_value is not None:
         value = check_byte(args.all_value, "--all")
-        return bytes([value] * 16)
-    if args.values is None or len(args.values) != 16:
-        raise FanLinkError("hold requires --all VALUE or exactly 16 values after --values")
+        return bytes([value] * NODE_COUNT)
+    if args.values is None or len(args.values) != NODE_COUNT:
+        raise FanLinkError("hold requires --all VALUE or exactly 8 values after --values")
     return bytes(check_byte(v, "duty") for v in args.values)
 
 
@@ -322,7 +326,7 @@ def self_test() -> None:
             raise FanLinkError(f"self-test failed: {message}")
 
     require(crc16_ccitt_false(b"123456789") == 0x29B1, "CRC vector")
-    payload = bytes(range(16))
+    payload = bytes(range(NODE_COUNT))
     encoded = encode_frame(SET_ALL_DUTY, 0x1234, payload)
     parser = StreamParser()
     frames = list(parser.feed(b"noise\x46" + encoded))
@@ -336,7 +340,7 @@ def self_test() -> None:
     require(frames[0].payload == payload, "corrupt frame recovery payload")
     require(parser.rejected_frames >= 1, "corrupt frame rejection counter")
 
-    status_payload = bytearray(102)
+    status_payload = bytearray(STATUS_PAYLOAD_SIZE)
     status_payload[0] = 1
     status_payload[1] = 7
     struct.pack_into("<I", status_payload, 2, 123)
@@ -370,8 +374,8 @@ def build_parser() -> argparse.ArgumentParser:
     set_cmd.add_argument("node", type=int)
     set_cmd.add_argument("duty", type=int)
 
-    set_list = commands.add_parser("set-list", help="send 16 duty values once")
-    set_list.add_argument("values", type=int, nargs=16)
+    set_list = commands.add_parser("set-list", help="send all 8 duty values once")
+    set_list.add_argument("values", type=int, nargs=NODE_COUNT)
 
     commands.add_parser("full", help="send all nodes full speed once")
     commands.add_parser("heartbeat", help="send one heartbeat")
@@ -380,7 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     hold = commands.add_parser("hold", help="maintain duty commands and monitor status")
     group = hold.add_mutually_exclusive_group(required=True)
     group.add_argument("--all", dest="all_value", type=int, help="same duty for all nodes")
-    group.add_argument("--values", type=int, nargs=16, help="16 node duty values")
+    group.add_argument("--values", type=int, nargs=NODE_COUNT, help="8 node duty values")
     hold.add_argument("--interval", type=float, default=0.2, help="command interval in seconds")
     hold.add_argument("--duration", type=float, default=0.0, help="0 means run until Ctrl-C")
 

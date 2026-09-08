@@ -24,5 +24,7 @@ jobs:
           python-version: '3.13'
       - name: Install pinned PlatformIO Core
         run: python3 -m pip install 'platformio==6.1.19'
-      - name: Build TX, RX1 and RX16 with real dependencies
-        run: pio run -d firmware -e fanlink_tx_esp8285 -e fanlink_rx_node01 -e fanlink_rx_node16
+      - name: Build TX, RX1, RX8 and RX2 UART with real dependencies
+        run: pio run -d firmware -e fanlink_tx_esp8285 -e fanlink_rx_node01 -e fanlink_rx_node08 -e fanlink_rx_node02_uart_diag
+      - name: Exercise patched RadioLib with simulated SPI and GPIO faults
+        run: python3 firmware/scripts/run_radiolib_recovery_tests.py

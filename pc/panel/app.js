@@ -4,7 +4,7 @@ const POLL_INTERVAL_MS = 250;
 const REQUEST_TIMEOUT_MS = 2200;
 const SNAPSHOT_STALE_MS = 1500;
 const LINK_METRICS_STALE_MS = 1500;
-const NODE_COUNT = 16;
+const NODE_COUNT = 8;
 const RSSI_UNKNOWN = -127;
 
 const elements = {};
@@ -319,7 +319,7 @@ function renderState(state) {
   const connecting = isConnecting(state);
   const hasSnapshot = Number.isFinite(Number(state.last_status_at)) && Number(state.last_status_at) > 0;
   const fallbackSnapshotAge = hasSnapshot ? Date.now() - Number(state.last_status_at) * 1000 : Infinity;
-  const snapshotFresh = hasSnapshot && (
+  const snapshotFresh = connected && hasSnapshot && (
     typeof state.status_snapshot_fresh === "boolean"
       ? state.status_snapshot_fresh
       : fallbackSnapshotAge <= SNAPSHOT_STALE_MS
@@ -426,11 +426,14 @@ function renderSnapshot(snapshot, nodes, hasSnapshot) {
 
   const failsafe = Boolean(snapshot.host_failsafe);
   const online = nodes.reduce((count, node) => count + (nodeIsOnline(node) ? 1 : 0), 0);
+  const degraded = nodes.filter((node) => nodeIsOnline(node) && nodeTelemetryStale(node)).length;
   elements.failsafeCard.dataset.level = failsafe ? "danger" : "safe";
   elements.failsafeValue.textContent = failsafe ? "已触发" : "正常";
   elements.failsafeDetail.textContent = failsafe ? "TX 应广播全部 duty=255" : "Host watchdog 当前健康";
   elements.onlineCount.textContent = String(online);
-  elements.onlineDetail.textContent = online === NODE_COUNT ? "全部节点有新鲜回传" : `${NODE_COUNT - online} 个节点离线或陈旧`;
+  elements.onlineDetail.textContent = degraded > 0
+    ? `${degraded} 个节点等待回传 · ${NODE_COUNT - online} 个离线`
+    : online === NODE_COUNT ? "全部节点有新鲜回传" : `${NODE_COUNT - online} 个节点离线`;
   elements.uptimeValue.textContent = formatDuration(snapshot.uptime_seconds);
   elements.nextPollValue.textContent = formatNodeId(snapshot.next_poll_id);
 }
@@ -502,17 +505,18 @@ function renderNode(nodeId, node, desiredValue, connected, snapshotFresh, linkMe
   if (!view) return;
 
   const hasTelemetry = Boolean(node);
-  const online = nodeIsOnline(node, snapshotFresh);
+  const online = connected && nodeIsOnline(node, snapshotFresh);
+  const stale = !connected || nodeTelemetryStale(node, snapshotFresh);
   const status = clampInteger(node && node.status, 0, 255, 0);
   const desired = resolveDesiredDuty(nodeId, desiredValue);
-  const applied = hasTelemetry ? clampInteger(node.applied_duty, 0, 255, null) : null;
+  const applied = hasTelemetry && !stale ? clampInteger(node.applied_duty, 0, 255, null) : null;
 
   view.row.dataset.online = String(online);
-  view.row.dataset.fault = String(status !== 0);
-  view.onlineText.textContent = online ? "遥测在线" : hasTelemetry ? "遥测离线 / 陈旧" : "尚无遥测";
-  view.rpm.textContent = hasTelemetry ? formatInteger(node.rpm) : "—";
-  view.uplinkRssi.textContent = linkMetricsFresh ? formatRssi(node.uplink_rssi_dbm) : "—";
-  view.downlinkRssi.textContent = linkMetricsFresh ? formatRssi(node.downlink_rssi_dbm) : "—";
+  view.row.dataset.fault = String(status !== 0 || stale);
+  view.onlineText.textContent = online ? stale ? "等待回传 / 降级" : "遥测在线" : hasTelemetry ? "遥测离线" : "尚无遥测";
+  view.rpm.textContent = hasTelemetry && !stale ? formatInteger(node.rpm) : "—";
+  view.uplinkRssi.textContent = linkMetricsFresh && !stale ? formatRssi(node.uplink_rssi_dbm) : "—";
+  view.downlinkRssi.textContent = linkMetricsFresh && !stale ? formatRssi(node.downlink_rssi_dbm) : "—";
   setNodeDutyInputs(view, desired);
   view.range.disabled = !connected || commandInFlight;
   view.number.disabled = !connected || commandInFlight;
@@ -520,10 +524,10 @@ function renderNode(nodeId, node, desiredValue, connected, snapshotFresh, linkMe
   view.meter.style.width = applied === null ? "0%" : `${dutyPercent(applied)}%`;
   view.age.textContent = hasTelemetry ? formatTelemetryAge(node.age_100ms) : "—";
   view.missed.textContent = hasTelemetry ? formatInteger(node.missed_polls) : "—";
-  renderStatusTags(view.tags, node, status, online);
+  renderStatusTags(view.tags, node, status, online, stale);
 }
 
-function renderStatusTags(container, node, status, online) {
+function renderStatusTags(container, node, status, online, stale) {
   container.replaceChildren();
   let labels = Array.isArray(node && node.status_labels)
     ? node.status_labels.filter((label) => label !== null && label !== undefined).map(String)
@@ -534,7 +538,8 @@ function renderStatusTags(container, node, status, online) {
   }
 
   if (labels.length === 0) {
-    appendStatusTag(container, online ? "正常" : "无新鲜回传", online ? "ok" : "warning");
+    const healthy = online && !stale;
+    appendStatusTag(container, healthy ? "正常" : online ? "等待回传" : "无新鲜回传", healthy ? "ok" : "warning");
     return;
   }
 
@@ -830,8 +835,18 @@ function nodeIsOnline(node, snapshotFresh = true) {
   if (!snapshotFresh) return false;
   if (!node || typeof node !== "object") return false;
   if (typeof node.online === "boolean") return node.online;
+  // Older backends cannot provide the recovery latch: use their conservative
+  // fresh-only result rather than synthesizing redundant presence in the UI.
+  return !nodeTelemetryStale(node, snapshotFresh);
+}
+
+function nodeTelemetryStale(node, snapshotFresh = true) {
+  if (!snapshotFresh || !node || typeof node !== "object") return true;
   const age = clampInteger(node.age_100ms, 0, 255, 255);
-  return !Boolean(node.stale) && age < 255 && !(clampInteger(node.status, 0, 255, 0) & 0x80);
+  const effectiveAge = typeof node.effective_age_seconds === "number"
+    ? node.effective_age_seconds : age * 0.1;
+  return Boolean(node.stale) || age === 255 || effectiveAge >= 2.5
+    || Boolean(clampInteger(node.status, 0, 255, 0) & 0x80);
 }
 
 function clampInteger(value, min, max, fallback) {

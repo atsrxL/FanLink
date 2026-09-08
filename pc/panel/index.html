@@ -48,8 +48,8 @@
 
       <section class="hero" aria-labelledby="pageTitle">
         <div>
-          <p class="eyebrow">LOCAL FAN BUS · 16 NODES</p>
-          <h1 id="pageTitle">16 路散热状态，一眼掌握。</h1>
+          <p class="eyebrow">LOCAL FAN BUS · 8 NODES</p>
+          <h1 id="pageTitle">8 路散热状态，一眼掌握。</h1>
           <p class="hero-copy">
             duty 是发送给风扇 PWM 的<strong>开环命令</strong>；RPM 是节点回传的实际转速，
             面板不会依据 RPM 自动修正 duty。
@@ -70,7 +70,7 @@
         </article>
         <article class="metric-card">
           <span class="metric-label">在线节点</span>
-          <strong class="metric-value"><span id="onlineCount">—</span><span class="metric-unit"> / 16</span></strong>
+          <strong class="metric-value"><span id="onlineCount">—</span><span class="metric-unit"> / 8</span></strong>
           <small id="onlineDetail">遥测在线判定</small>
         </article>
         <article class="metric-card">
@@ -81,7 +81,7 @@
         <article class="metric-card">
           <span class="metric-label">下一轮询节点</span>
           <strong class="metric-value" id="nextPollValue">—</strong>
-          <small>节点 ID 1–16</small>
+          <small>节点 ID 1–8</small>
         </article>
         <article class="metric-card">
           <span class="metric-label">状态帧年龄</span>
@@ -100,7 +100,7 @@
           <div>
             <p class="eyebrow">GLOBAL COMMAND</p>
             <h2 id="globalControlTitle">全局 duty</h2>
-            <p>先选择目标值，再明确应用到全部 16 个节点。数值范围为 0–255。</p>
+            <p>先选择目标值，再明确应用到全部 8 个节点。数值范围为 0–255。</p>
           </div>
           <span class="safety-chip">失控默认全速</span>
         </div>
@@ -187,7 +187,7 @@
 
         <div class="table-shell">
           <table class="nodes-table">
-            <caption class="sr-only">FanLink 16 个节点的遥测及 duty 控制</caption>
+            <caption class="sr-only">FanLink 8 个节点的遥测及 duty 控制</caption>
             <thead>
               <tr>
                 <th scope="col">节点</th>

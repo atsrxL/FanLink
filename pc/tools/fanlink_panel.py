@@ -33,11 +33,14 @@ except ImportError:  # pragma: no cover - exercised by direct script execution.
 HTTP_PORT = 8765
 SERIAL_BAUD = 115200
 SEND_INTERVAL_SECONDS = 0.2
-STATUS_STALE_SECONDS = 1.5
-LINK_METRICS_STALE_SECONDS = 1.5
+STATUS_STALE_SECONDS = 2.5
+LINK_METRICS_STALE_SECONDS = 2.5
+NODE_TELEMETRY_STALE_SECONDS = 2.5
+NODE_OFFLINE_SECONDS = 6.0
+NODE_OFFLINE_MISSED_POLLS = 5
 MAX_REQUEST_BYTES = 4096
 FULL_SPEED = 255
-NODE_COUNT = 16
+NODE_COUNT = 8
 
 FAULT_NAMES = {
     0: "none",
@@ -86,13 +89,13 @@ def validate_duty(value: object) -> int:
 
 def validate_node(value: object) -> int:
     if type(value) is not int or not 1 <= value <= NODE_COUNT:
-        raise PanelError("node must be an integer from 1 through 16")
+        raise PanelError("node must be an integer from 1 through 8")
     return value
 
 
 def validate_duties(value: object) -> list[int]:
     if not isinstance(value, list) or len(value) != NODE_COUNT:
-        raise PanelError("duties must be an array of exactly 16 integers")
+        raise PanelError("duties must be an array of exactly 8 integers")
     return [validate_duty(item) for item in value]
 
 
@@ -325,6 +328,7 @@ class FanLinkPanel:
         self._next_poll_id = 1
         self._uptime_seconds = 0
         self._nodes = _unknown_nodes()
+        self._node_online = [False] * NODE_COUNT
         self._link_metrics = _unknown_link_metrics()
         self._send_sequence = 0
         self._last_send_at: Optional[float] = None
@@ -348,6 +352,7 @@ class FanLinkPanel:
         self._next_poll_id = 1
         self._uptime_seconds = 0
         self._nodes = _unknown_nodes()
+        self._node_online = [False] * NODE_COUNT
         self._link_metrics = _unknown_link_metrics()
         self._send_sequence = 0
         self._last_send_at = None
@@ -369,7 +374,7 @@ class FanLinkPanel:
             return [
                 {
                     "device": "demo",
-                    "description": "FanLink 16-node demo",
+                    "description": "FanLink 8-node demo",
                     "hwid": "FANLINK-DEMO",
                 }
             ]
@@ -636,12 +641,16 @@ class FanLinkPanel:
                 for node in snapshot.nodes
             ]
             with self._lock:
+                # Expire the previous evidence before accepting a new snapshot.
+                # Merely resuming Host STATUS must not revive an offline RX.
+                self._update_node_presence_locked(self._monotonic())
                 self._host_failsafe = snapshot.host_failsafe
                 self._next_poll_id = snapshot.next_poll_id
                 self._uptime_seconds = snapshot.uptime_seconds
                 self._nodes = nodes
                 self._last_status_at = self._wall_time()
                 self._last_status_monotonic = self._monotonic()
+                self._update_node_presence_locked(self._last_status_monotonic, allow_recovery=True)
             return
 
         if frame.message_type == fanlink_cli.ERROR_EVENT:
@@ -692,7 +701,7 @@ class FanLinkPanel:
                 metrics: list[dict[str, int]] = []
                 for index, duty in enumerate(duties):
                     node_id = index + 1
-                    transient_stale = node_id == 13 and stale_window
+                    transient_stale = node_id == 7 and stale_window
                     tach_timeout = node_id == 7 and int(elapsed * 2.0) % 24 == 23
                     if duty < 8 or tach_timeout:
                         rpm = 0
@@ -747,17 +756,38 @@ class FanLinkPanel:
                 self._host_failsafe = False
                 self._next_poll_id = next_poll_id
                 self._uptime_seconds = int(elapsed)
+                self._update_node_presence_locked(self._monotonic())
                 self._nodes = nodes
                 self._link_metrics = metrics
                 self._last_status_at = self._wall_time()
                 self._last_status_monotonic = self._monotonic()
+                self._update_node_presence_locked(self._last_status_monotonic, allow_recovery=True)
                 self._last_link_metrics_at = self._wall_time()
                 self._last_link_metrics_monotonic = self._monotonic()
             stop_event.wait(0.2)
         self._finish_worker(token, None)
 
+    def _update_node_presence_locked(self, now: float, *, allow_recovery: bool = False) -> None:
+        snapshot_age = (
+            None if self._last_status_monotonic is None
+            else max(0.0, now - self._last_status_monotonic)
+        )
+        trusted = (self._connected and snapshot_age is not None
+                   and snapshot_age < STATUS_STALE_SECONDS)
+        for index, node in enumerate(self._nodes):
+            age = node["age_100ms"] * 0.1 + (snapshot_age or 0.0)
+            eligible = (trusted and node["age_100ms"] != 255
+                        and node["missed_polls"] < NODE_OFFLINE_MISSED_POLLS
+                        and age < NODE_OFFLINE_SECONDS)
+            if not eligible:
+                self._node_online[index] = False
+            elif allow_recovery and node["missed_polls"] == 0 and not (node["status"] & 0x80) and age < NODE_TELEMETRY_STALE_SECONDS:
+                # TX clears misses only after validating a new RX Reply.
+                self._node_online[index] = True
+
     def state(self) -> dict[str, Any]:
         with self._lock:
+            self._update_node_presence_locked(self._monotonic())
             duties = list(self._duties)
             nodes = copy.deepcopy(self._nodes)
             status_age_seconds = (
@@ -766,8 +796,8 @@ class FanLinkPanel:
                 else max(0.0, self._monotonic() - self._last_status_monotonic)
             )
             status_snapshot_fresh = (
-                status_age_seconds is not None
-                and status_age_seconds <= STATUS_STALE_SECONDS
+                self._connected and status_age_seconds is not None
+                and status_age_seconds < STATUS_STALE_SECONDS
             )
             link_metrics_age_seconds = (
                 None
@@ -775,22 +805,28 @@ class FanLinkPanel:
                 else max(0.0, self._monotonic() - self._last_link_metrics_monotonic)
             )
             link_metrics_snapshot_fresh = (
-                link_metrics_age_seconds is not None
-                and link_metrics_age_seconds <= LINK_METRICS_STALE_SECONDS
+                self._connected and link_metrics_age_seconds is not None
+                and link_metrics_age_seconds < LINK_METRICS_STALE_SECONDS
             )
             link_metrics = (
                 copy.deepcopy(self._link_metrics)
                 if link_metrics_snapshot_fresh
                 else _unknown_link_metrics()
             )
-            for node, requested_duty, metrics in zip(nodes, duties, link_metrics):
+            for node, requested_duty, metrics, online in zip(nodes, duties, link_metrics, self._node_online):
                 node["requested_duty"] = requested_duty
+                node["effective_age_seconds"] = (
+                    None if node["age_100ms"] == 255 or status_age_seconds is None
+                    else node["age_100ms"] * 0.1 + status_age_seconds
+                )
                 node_stale = (
                     not status_snapshot_fresh
                     or bool(node["status"] & 0x80)
                     or node["age_100ms"] == 255
+                    or node["age_100ms"] * 0.1 + (status_age_seconds or 0.0) >= NODE_TELEMETRY_STALE_SECONDS
                 )
                 node["stale"] = node_stale
+                node["online"] = online
                 node["uplink_rssi_dbm"] = (
                     fanlink_cli.RSSI_UNKNOWN
                     if node_stale
@@ -1039,7 +1075,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Local FanLink TX control panel")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP listen address")
     parser.add_argument("--port", type=int, default=HTTP_PORT, help="HTTP listen port")
-    parser.add_argument("--demo", action="store_true", help="simulate a dynamic 16-node network")
+    parser.add_argument("--demo", action="store_true", help="simulate a dynamic 8-node network")
     parser.add_argument("--open", action="store_true", help="open the panel in the default browser")
     parser.add_argument(
         "--allow-remote",

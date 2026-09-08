@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic accounting model for the 16-node poll loop."""
+"""Deterministic accounting model for the eight-node poll loop."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class Node:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seconds", type=float, default=10.0)
-    parser.add_argument("--slot-us", type=int, default=10_000)
+    parser.add_argument("--slot-us", type=int, default=125_000)
     parser.add_argument(
         "--loss", type=float, default=0.0, help="deterministic illustrative loss ratio, 0..1"
     )
@@ -25,10 +25,10 @@ def main() -> None:
         raise SystemExit("invalid arguments")
 
     slots = int(args.seconds * 1_000_000 / args.slot_us)
-    nodes = [Node() for _ in range(16)]
-    loss_accumulators = [0.0] * 16
+    nodes = [Node() for _ in range(8)]
+    loss_accumulators = [0.0] * 8
     for slot in range(slots):
-        node_index = slot % 16
+        node_index = slot % 8
         node = nodes[node_index]
         node.polls += 1
         loss_accumulators[node_index] += args.loss
@@ -39,7 +39,7 @@ def main() -> None:
             node.replies += 1
 
     print(f"slots={slots} slot_rate_hz={1_000_000 / args.slot_us:.3f}")
-    print(f"full_sweep_ms={16 * args.slot_us / 1000:.3f}")
+    print(f"full_sweep_ms={8 * args.slot_us / 1000:.3f}")
     for index, node in enumerate(nodes, 1):
         print(f"node={index:02d} polls={node.polls} replies={node.replies}")
 

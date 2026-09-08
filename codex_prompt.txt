@@ -1,3 +1,7 @@
+> 2026-09-08 用户明确授权新增 RX 射频 OTA。当前 0.1.8-dev 候选保留既有控制协议，
+> 增加独立维护升级通道；历史 OTA 非目标对本功能已被本次授权替代。使用与边界见
+> `docs/OTA.md`、`docs/OTA_WIRE.md` 和 ADR-018。未刷写实机。
+
 You are taking over a firmware repository named FanLink.
 
 First read, in order:

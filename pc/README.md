@@ -1,10 +1,38 @@
 # FanLink PC 控制面板
 
 本目录包含 FanLink 的 Python 后端、浏览器面板和 Host 串口工具。后端连接 TX 的
-115200 baud 串口，显示 16 个节点的 duty、RPM、上下行 RSSI 与射频诊断。
+115200 baud 串口，显示 8 个节点的 duty、RPM、上下行 RSSI 与射频诊断。
+Host 串口协议仅支持 v2：SET_ALL 载荷 8 字节、STATUS 54 字节、METRICS 16 字节，
+没有第 9–16 路，也不补齐、截断或回退到 v1。PC/TX/C6 必须配套升级；
+旧 TX 的升级需要归档的 v1 工具或 ROM bootloader，本版工具不能控制/升级旧 Host v1 TX。
+OTA/设置等其他消息载荷及 RF OTA 内部 v1 不变，Host 最大载荷仍为 128 字节。
 配套 TX/RX 固件位于 [`../firmware/`](../firmware/)。
 
 ## 启动
+
+离线射频软件轨迹分析（不打开串口）：
+
+```sh
+python3 pc/tools/fanlink_trace_analyze.py build/paired-capture.jsonl --exclude-seconds 3
+```
+
+输入为双端采集JSONL：TX的`tx_diag`和RX的`rx`记录，`text`字段包含RTE。
+输出区分完整/缺片轨迹、有效位、启动epoch、计时回绕及成功/CRC片段；
+过滤初始3秒可能导致首个快照缺片，会如实标出。软件采样不等于物理边沿，
+不能用采样快照数量计算RF丢包率，也不能据此声称CRC根因已证实。
+
+
+新增 `tools/fanlink_config.py` 查询/设置工具；示例从仓库根目录运行：
+
+```sh
+python3 pc/tools/fanlink_config.py --port /dev/YOUR_TX_UART --network 0x4B4E4C46 query --node 0
+python3 pc/tools/fanlink_config.py --port /dev/YOUR_TX_UART --network 0x4B4E4C46 tx-power 13
+python3 pc/tools/fanlink_config.py --port /dev/YOUR_TX_UART --network 0x4B4E4C46 rx-power --node 1 -6
+python3 pc/tools/fanlink_config.py --port /dev/YOUR_TX_UART --network 0x4B4E4C46 rx-mode --node 2 PWMSWAP
+```
+
+实际串口需要 pyserial，且须先停止同串口的面板/C6；ACK 表示保存/计划重启，
+不是物理验收。设置与 OTA 边界见 [`../docs/CAPABILITIES.md`](../docs/CAPABILITIES.md)。
 
 以下命令在本目录 `pc/` 中执行。使用 `uv` 临时解析串口依赖并启动：
 
@@ -55,8 +83,14 @@ CLI 还提供 `set`、`set-list`、`full`、`heartbeat` 单次发送命令。单
 
 ## 控制语义
 
-- 初始、断连和每次重新连接时，16 路本地请求均恢复为 `255`（全速请求）。
-- 连接后每 200 ms 发送完整 `duty[16]`，维持 TX 默认 500 ms 的 Host watchdog。
+- 连接与数据新鲜度分开：在线节点连续少于5次漏回包且回包年龄小于6秒时
+  保持在线；任一超限离线。串口断开/状态超时立即离线，不享受6秒RF宽限。
+- 遥测年龄达到2.5秒或TX标陈旧时，RPM/实际PWM/RSSI不再显示为当前值；
+  宽限期间显示“等待回传”。离线后需新鲜、miss=0的有效节点状态恢复。
+- 这只是状态容错，既不降低CRC门槛，也不改变500ms全速保护或真实丢包率。
+
+- 初始、断连和每次重新连接时，8 路本地请求均恢复为 `255`（全速请求）。
+- 连接后每 200 ms 发送完整 `duty[8]`，维持 TX 默认 500 ms 的 Host watchdog。
 - duty 范围为 `0..255`：`0` 是停转请求，`255` 是全速请求；RPM 是接收机回传，
   不代表闭环转速目标。
 - 模拟界面和离线测试只验证 PC 程序行为；真实 RF、PWM、RPM 与失效保护验收见
@@ -67,13 +101,13 @@ CLI 还提供 `set`、`set-list`、`full`、`heartbeat` 单次发送命令。单
 在 `pc/` 执行：
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_fanlink_panel.py' -v
+python3 -m unittest discover -s tests -v
 python3 tools/fanlink_cli.py --self-test
 node --check panel/app.js
 ```
 
-测试使用模拟串口与本机临时 HTTP 端口，不要求连接硬件。Node.js 仅用于上述
-JavaScript 语法检查，运行面板不依赖 Node.js。
+测试使用模拟串口与本机临时 HTTP 端口，不要求连接硬件。Node.js 用于前端
+状态渲染回归测试及 JavaScript 语法检查，运行面板不依赖 Node.js。
 
 目录内容：
 

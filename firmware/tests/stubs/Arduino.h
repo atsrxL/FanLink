@@ -2,6 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+
+inline void* memcpy_P(void* destination, const void* source, std::size_t size) {
+  return std::memcpy(destination, source, size);
+}
 
 #ifndef F_CPU
 #define F_CPU 80000000UL
@@ -11,6 +16,9 @@
 #endif
 #ifndef IRAM_ATTR
 #define IRAM_ATTR
+#endif
+#ifndef PROGMEM
+#define PROGMEM
 #endif
 
 #define HIGH 1
@@ -27,6 +35,8 @@ class HardwareSerial {
   void begin(unsigned long, int) {}
   void end() {}
   int available() const { return 0; }
+  int availableForWrite() const { return 128; }
+  void setDebugOutput(bool) {}
   int read() { return -1; }
   std::size_t write(const std::uint8_t*, std::size_t length) { return length; }
   std::size_t write(std::uint8_t) { return 1U; }
@@ -34,6 +44,16 @@ class HardwareSerial {
 };
 
 extern HardwareSerial Serial;
+
+struct rst_info;
+class ESPClass {
+ public:
+  std::uint32_t getFreeSketchSpace() const;
+  void restart();
+  void rebootIntoUartDownloadMode();
+  rst_info* getResetInfoPtr();
+};
+extern ESPClass ESP;
 
 inline std::uint32_t millis() { return 0U; }
 inline std::uint32_t micros() { return 0U; }

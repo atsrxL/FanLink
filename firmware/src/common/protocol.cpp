@@ -41,7 +41,9 @@ bool encodeControlPacket(const ControlPacket& packet,
   bytes::putU16Le(out.data() + 8U, packet.sequence);
   out[10] = packet.pollId;
   out[11] = packet.flags;
-  std::copy(packet.duty.begin(), packet.duty.end(), out.begin() + 12U);
+  std::copy_n(packet.duty.begin(), kNodeCount, out.begin() + 12U);
+  // Fixed RF v1 envelope: bytes20..27 are reserved, not extra channels.
+  std::fill(out.begin() + 12U + kNodeCount, out.begin() + 28U, 255U);
   bytes::putU16Le(out.data() + 28U, crc16CcittFalse(out.data(), 28U));
   return true;
 }
@@ -59,7 +61,7 @@ bool decodeControlPacket(const std::uint8_t* data, std::size_t length, ControlPa
   candidate.sequence = bytes::getU16Le(data + 8U);
   candidate.pollId = data[10];
   candidate.flags = data[11];
-  std::copy(data + 12U, data + 28U, candidate.duty.begin());
+  std::copy_n(data + 12U, kNodeCount, candidate.duty.begin());
   out = candidate;
   return true;
 }

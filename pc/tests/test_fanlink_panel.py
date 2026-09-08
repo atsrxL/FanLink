@@ -3,11 +3,13 @@ from __future__ import annotations
 import http.client
 import json
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -81,48 +83,67 @@ def wait_until(predicate, timeout: float = 1.0) -> None:
 
 
 def status_payload() -> bytes:
-    payload = bytearray(102)
+    payload = bytearray(fanlink_cli.STATUS_PAYLOAD_SIZE)
     payload[0] = 0
-    payload[1] = 9
+    payload[1] = 8
     struct.pack_into("<I", payload, 2, 321)
-    for index in range(16):
+    for index in range(fanlink_cli.NODE_COUNT):
         offset = 6 + index * 6
         struct.pack_into(
             "<HBBBB",
             payload,
             offset,
             1000 + index * 100,
-            0x80 if index == 12 else 0,
+            0x80 if index == 6 else 0,
             200 - index,
-            255 if index == 12 else index % 3,
-            4 if index == 12 else 0,
+            255 if index == 6 else index % 3,
+            4 if index == 6 else 0,
         )
     return bytes(payload)
 
 
 def link_metrics_payload() -> bytes:
     payload = bytearray(fanlink_cli.LINK_METRICS_PAYLOAD_SIZE)
-    for index in range(16):
+    for index in range(fanlink_cli.NODE_COUNT):
         struct.pack_into("<bb", payload, index * 2, -42 - index, -55 - index)
     return bytes(payload)
 
 
 class ValidationTests(unittest.TestCase):
+    def test_cli_commands_send_exactly_eight_slots_without_padding(self):
+        _, payload = fanlink_cli.command_payload(Namespace(command="set-list", values=list(range(8))))
+        self.assertEqual(payload, bytes(range(8)))
+        self.assertEqual(fanlink_cli.hold_values(Namespace(all_value=0, values=None)),
+                         bytes(8))
+        self.assertEqual(fanlink_cli.hold_values(Namespace(all_value=None, values=list(range(8)))),
+                         bytes(range(8)))
+        self.assertEqual(fanlink_cli.command_payload(Namespace(command="full")),
+                         (fanlink_cli.SET_ALL_DUTY, bytes([255] * 8)))
+        self.assertEqual(fanlink_cli.command_payload(Namespace(command="set", node=8, duty=99)),
+                         (fanlink_cli.SET_ONE_DUTY, bytes((8, 99))))
+        with self.assertRaises(fanlink_cli.FanLinkError):
+            fanlink_cli.command_payload(Namespace(command="set", node=9, duty=0))
+        for count in (7, 9, 16):
+            with self.subTest(count=count), self.assertRaises(fanlink_cli.FanLinkError):
+                fanlink_cli.command_payload(Namespace(command="set-list", values=[0] * count))
+            with self.subTest(hold_count=count), self.assertRaises(fanlink_cli.FanLinkError):
+                fanlink_cli.hold_values(Namespace(all_value=None, values=[0] * count))
+
     def test_duty_and_node_validation_is_strict(self) -> None:
         self.assertEqual(fanlink_panel.validate_duty(0), 0)
         self.assertEqual(fanlink_panel.validate_duty(255), 255)
         self.assertEqual(fanlink_panel.validate_node(1), 1)
-        self.assertEqual(fanlink_panel.validate_node(16), 16)
+        self.assertEqual(fanlink_panel.validate_node(8), 8)
         for invalid in (-1, 256, True, False, 1.5, "1", None):
             with self.subTest(duty=invalid), self.assertRaises(fanlink_panel.PanelError):
                 fanlink_panel.validate_duty(invalid)
-        for invalid in (0, 17, True, 1.0, "1", None):
+        for invalid in (0, 9, 16, 17, True, 1.0, "1", None):
             with self.subTest(node=invalid), self.assertRaises(fanlink_panel.PanelError):
                 fanlink_panel.validate_node(invalid)
 
-    def test_full_duty_array_requires_exactly_16_bytes(self) -> None:
-        self.assertEqual(fanlink_panel.validate_duties(list(range(16))), list(range(16)))
-        for invalid in ([1] * 15, [1] * 17, tuple([1] * 16), [1] * 15 + [True]):
+    def test_active_duty_array_requires_exactly_8_values(self) -> None:
+        self.assertEqual(fanlink_panel.validate_duties(list(range(8))), list(range(8)))
+        for invalid in ([1] * 7, [1] * 9, tuple([1] * 8), [1] * 7 + [True]):
             with self.subTest(value=invalid), self.assertRaises(fanlink_panel.PanelError):
                 fanlink_panel.validate_duties(invalid)
 
@@ -158,6 +179,15 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(legacy["receive_io_errors"], 4)
         self.assertEqual(legacy["invalid_replies"], 5)
 
+    def test_recovery_event_cannot_masquerade_as_rf_fault_or_replies(self) -> None:
+        text = "RFR attempts=12 successes=10 failures=2"
+        parsed = fanlink_panel.parse_radio_diagnostic(text)
+        self.assertEqual(parsed["raw"], text)
+        self.assertIsNone(parsed["fault"])
+        self.assertIsNone(parsed["fault_code"])
+        self.assertIsNone(parsed["accepted_replies"])
+        self.assertIsNone(parsed["begin_ok"])
+
 
 class LinkMetricsProtocolTests(unittest.TestCase):
     def test_link_metrics_decoder_is_signed_ordered_and_strict(self) -> None:
@@ -165,7 +195,7 @@ class LinkMetricsProtocolTests(unittest.TestCase):
         payload = bytearray(link_metrics_payload())
         struct.pack_into("<bb", payload, 14, fanlink_cli.RSSI_UNKNOWN, -128)
         snapshot = fanlink_cli.decode_link_metrics_snapshot(bytes(payload))
-        self.assertEqual(len(snapshot.nodes), 16)
+        self.assertEqual(len(snapshot.nodes), 8)
         self.assertEqual(snapshot.nodes[0].node_id, 1)
         self.assertEqual(snapshot.nodes[0].uplink_rssi_dbm, -42)
         self.assertEqual(snapshot.nodes[0].downlink_rssi_dbm, -55)
@@ -196,7 +226,7 @@ class PanelStateTests(unittest.TestCase):
         state = self.panel.state()
         self.assertFalse(state["connected"])
         self.assertTrue(state["host_failsafe"])
-        self.assertEqual(state["duties"], [255] * 16)
+        self.assertEqual(state["duties"], [255] * 8)
         self.assertTrue(all(node["requested_duty"] == 255 for node in state["nodes"]))
         self.assertTrue(
             all(node["uplink_rssi_dbm"] == fanlink_cli.RSSI_UNKNOWN for node in state["nodes"])
@@ -220,7 +250,7 @@ class PanelStateTests(unittest.TestCase):
             frames.extend(parser.feed(write))
         self.assertGreaterEqual(len(frames), 1)
         self.assertEqual(frames[0].message_type, fanlink_cli.SET_ALL_DUTY)
-        self.assertEqual(frames[0].payload, bytes([255] * 16))
+        self.assertEqual(frames[0].payload, bytes([255] * 8))
 
         self.panel.set_node_duty(3, 77)
         wait_until(lambda: self.serial.write_count() >= 2)
@@ -229,6 +259,7 @@ class PanelStateTests(unittest.TestCase):
         for write in self.serial.copy_writes():
             frames.extend(parser.feed(write))
         self.assertTrue(any(frame.payload[2] == 77 for frame in frames[1:]))
+        self.assertTrue(all(len(frame.payload) == 8 for frame in frames))
 
         self.panel.ingest_serial_bytes(
             fanlink_cli.encode_frame(
@@ -248,7 +279,7 @@ class PanelStateTests(unittest.TestCase):
 
         disconnected = self.panel.disconnect()
         self.assertFalse(disconnected["connected"])
-        self.assertEqual(disconnected["duties"], [255] * 16)
+        self.assertEqual(disconnected["duties"], [255] * 8)
         self.assertIsNone(disconnected["last_status_at"])
         self.assertIsNone(disconnected["last_link_metrics_at"])
         self.assertFalse(disconnected["link_metrics_snapshot_fresh"])
@@ -265,6 +296,7 @@ class PanelStateTests(unittest.TestCase):
         self.assertEqual(self.serial.write_count(), write_count)
 
     def test_status_and_error_frames_update_json_state(self) -> None:
+        self.panel._connected = True  # Direct ingestion models a live transport.
         self.panel.ingest_serial_bytes(
             fanlink_cli.encode_frame(fanlink_cli.STATUS_SNAPSHOT, 10, status_payload())
         )
@@ -283,15 +315,15 @@ class PanelStateTests(unittest.TestCase):
         )
         state = self.panel.state()
         self.assertFalse(state["host_failsafe"])
-        self.assertEqual(state["next_poll_id"], 9)
+        self.assertEqual(state["next_poll_id"], 8)
         self.assertEqual(state["uptime_seconds"], 321)
-        self.assertEqual(len(state["nodes"]), 16)
+        self.assertEqual(len(state["nodes"]), 8)
         self.assertEqual(state["nodes"][0]["rpm"], 1000)
         self.assertEqual(state["nodes"][0]["uplink_rssi_dbm"], -42)
         self.assertEqual(state["nodes"][0]["downlink_rssi_dbm"], -55)
         self.assertTrue(state["link_metrics_snapshot_fresh"])
         self.assertIsNotNone(state["last_link_metrics_at"])
-        self.assertTrue(state["nodes"][12]["stale"])
+        self.assertTrue(state["nodes"][6]["stale"])
         self.assertEqual(state["diagnostic"]["raw"], compact)
         self.assertEqual(state["diagnostic"]["last_rx_error"], -6)
         self.assertEqual(state["diagnostic"]["frame_sequence"], 11)
@@ -322,6 +354,7 @@ class PanelStateTests(unittest.TestCase):
             monotonic=lambda: monotonic_now[0],
             auto_start_demo=False,
         )
+        panel._connected = True
         try:
             panel.ingest_serial_bytes(
                 fanlink_cli.encode_frame(
@@ -335,11 +368,11 @@ class PanelStateTests(unittest.TestCase):
             )
             fresh = panel.state()
             self.assertTrue(fresh["link_metrics_snapshot_fresh"])
-            self.assertEqual(fresh["nodes"][15]["uplink_rssi_dbm"], -57)
-            self.assertEqual(fresh["nodes"][15]["downlink_rssi_dbm"], -70)
-            self.assertTrue(fresh["nodes"][12]["stale"])
+            self.assertEqual(fresh["nodes"][7]["uplink_rssi_dbm"], -49)
+            self.assertEqual(fresh["nodes"][7]["downlink_rssi_dbm"], -62)
+            self.assertTrue(fresh["nodes"][6]["stale"])
             self.assertEqual(
-                fresh["nodes"][12]["uplink_rssi_dbm"], fanlink_cli.RSSI_UNKNOWN
+                fresh["nodes"][6]["uplink_rssi_dbm"], fanlink_cli.RSSI_UNKNOWN
             )
 
             monotonic_now[0] += fanlink_panel.LINK_METRICS_STALE_SECONDS + 0.01
@@ -368,6 +401,7 @@ class PanelStateTests(unittest.TestCase):
             monotonic=lambda: monotonic_now[0],
             auto_start_demo=False,
         )
+        panel._connected = True
         try:
             panel.ingest_serial_bytes(
                 fanlink_cli.encode_frame(
@@ -385,21 +419,157 @@ class PanelStateTests(unittest.TestCase):
         finally:
             panel.close()
 
+    def test_native_eight_node_status_and_2500ms_age(self) -> None:
+        now = [100.0]
+        panel = fanlink_panel.FanLinkPanel(monotonic=lambda: now[0], auto_start_demo=False)
+        panel._connected = True
+        try:
+            payload = bytearray(status_payload())
+            payload[10] = 10  # Node1 already has a one-second receiver age.
+            panel.ingest_serial_bytes(fanlink_cli.encode_frame(fanlink_cli.STATUS_SNAPSHOT, 1, payload))
+            self.assertEqual(len(panel.state()["nodes"]), 8)
+            self.assertEqual(len(fanlink_cli.decode_status_snapshot(payload).nodes), 8)
+            now[0] += 1.4
+            self.assertFalse(panel.state()["nodes"][0]["stale"])
+            now[0] += 0.2
+            self.assertTrue(panel.state()["nodes"][0]["stale"])
+            self.assertTrue(panel.state()["status_snapshot_fresh"])
+        finally:
+            panel.close()
+
     def test_duty_updates_require_a_connection(self) -> None:
         with self.assertRaises(fanlink_panel.PanelError) as caught:
             self.panel.set_uniform_duty(100)
         self.assertEqual(caught.exception.status, 409)
 
 
+class NodePresenceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = 0.0
+        self.panel = fanlink_panel.FanLinkPanel(
+            monotonic=lambda: self.now, auto_start_demo=False,
+        )
+        # Exercise the real binary parser without starting a serial worker.
+        self.panel._connected = True
+
+    def tearDown(self) -> None:
+        self.panel.close()
+
+    def update(self, *, age=0, misses=0, status=0, rpm=1400, corrupt=False):
+        payload = bytearray(status_payload())
+        struct.pack_into("<HBBBB", payload, 6, rpm, status, 128, age, misses)
+        frame = bytearray(fanlink_cli.encode_frame(fanlink_cli.STATUS_SNAPSHOT, 1, payload))
+        if corrupt:
+            frame[-1] ^= 1
+        self.panel.ingest_serial_bytes(bytes(frame))
+        return self.node()
+
+    def node(self):
+        return self.panel.state()["nodes"][0]
+
+    def test_never_seen_or_initial_stale_cannot_be_online(self):
+        self.assertFalse(self.node()["online"])
+        self.assertFalse(self.update(age=255)["online"])
+        self.assertFalse(self.update(age=30, misses=2, status=0x80)["online"])
+        self.assertTrue(self.update()["online"])
+
+    def test_four_misses_tolerated_fifth_offline(self):
+        self.update()
+        for misses in range(1, 5):
+            self.now += 1.0
+            node = self.update(age=misses * 10, misses=misses)
+            self.assertTrue(node["online"], misses)
+        self.now += 1.0
+        self.assertFalse(self.update(age=50, misses=5)["online"])
+        self.assertEqual(self.node()["rpm"], 1400)  # Raw history retained, not fresh.
+        self.assertTrue(self.node()["stale"])
+
+    def test_combined_age_5999ms_online_6000ms_offline(self):
+        self.update()
+        self.update(age=59, misses=4, status=0x80)
+        self.now = 0.099
+        self.assertTrue(self.node()["online"])
+        self.now = 0.1
+        self.assertFalse(self.node()["online"])
+
+    def test_stale_boundary_and_rssi_invalidation_independent_of_online(self):
+        self.update()
+        self.update(age=24, misses=2)
+        self.panel.ingest_serial_bytes(fanlink_cli.encode_frame(
+            fanlink_cli.LINK_METRICS_SNAPSHOT, 2, link_metrics_payload()))
+        self.now = 0.099
+        self.assertFalse(self.node()["stale"])
+        self.assertEqual(self.node()["uplink_rssi_dbm"], -42)
+        self.now = 0.1
+        self.assertTrue(self.node()["stale"])
+        self.assertTrue(self.node()["online"])
+        self.assertEqual(self.node()["uplink_rssi_dbm"], fanlink_cli.RSSI_UNKNOWN)
+        self.assertEqual(self.node()["downlink_rssi_dbm"], fanlink_cli.RSSI_UNKNOWN)
+        self.assertEqual(self.node()["rpm"], 1400)
+
+    def test_stale_bit_does_not_force_previously_online_node_offline(self):
+        self.update()
+        node = self.update(age=0, misses=1, status=0x80)
+        self.assertTrue(node["online"])
+        self.assertTrue(node["stale"])
+
+    def test_paused_status_latches_offline_even_without_state_polling(self):
+        self.update()
+        self.now = 2.5
+        node = self.update(age=30, misses=3, status=0x80)
+        self.assertFalse(node["online"])
+        self.assertTrue(node["stale"])
+        self.assertFalse(self.update(age=10, misses=1)["online"])
+        self.assertTrue(self.update(age=0, misses=0)["online"])
+
+    def test_status_expiry_and_transport_loss_are_immediate(self):
+        self.update()
+        self.now = 2.499
+        self.assertTrue(self.node()["online"])
+        self.now = 2.5
+        self.assertFalse(self.node()["online"])
+        self.update()
+        self.panel._connected = False
+        self.assertFalse(self.node()["online"])
+        self.assertTrue(self.node()["stale"])
+        self.panel._connected = True
+        self.assertFalse(self.update(age=30, misses=2)["online"])
+        self.assertTrue(self.update()["online"])
+
+    def test_offline_requires_fresh_zero_miss_reply_and_crc_is_preserved(self):
+        self.update()
+        self.assertFalse(self.update(age=50, misses=5)["online"])
+        self.assertFalse(self.update(age=30, misses=0)["online"])
+        self.assertFalse(self.update(age=0, misses=0, status=0x80)["online"])
+        self.assertFalse(self.update(age=0, misses=1)["online"])
+        self.now = 0.25
+        previous = self.node()
+        self.assertFalse(self.update(corrupt=True, rpm=9900)["online"])
+        self.assertEqual(self.node(), previous)
+        self.assertGreater(self.panel.state()["serial_rejected_frames"], 0)
+        self.assertTrue(self.update(rpm=1450)["online"])
+        self.assertFalse(self.node()["stale"])
+        self.assertEqual(self.node()["rpm"], 1450)
+
+    def test_intermittent_misses_do_not_accumulate_across_valid_replies(self):
+        self.update()
+        for _ in range(10):
+            for misses in (1, 2, 0):
+                self.now += 1.0
+                self.assertTrue(self.update(age=misses * 10, misses=misses)["online"])
+        self.assertFalse(self.node()["stale"])
+        self.assertEqual(self.node()["missed_polls"], 0)
+
+
 class DemoTests(unittest.TestCase):
-    def test_demo_has_dynamic_16_node_state_and_reconnects_safely(self) -> None:
+    def test_demo_has_dynamic_eight_node_state_and_reconnects_safely(self) -> None:
         panel = fanlink_panel.FanLinkPanel(demo=True, send_interval=0.02)
         try:
             wait_until(lambda: panel.state()["last_status_at"] is not None)
             state = panel.state()
             self.assertTrue(state["demo"])
             self.assertTrue(state["connected"])
-            self.assertEqual(len(state["nodes"]), 16)
+            self.assertEqual(len(state["nodes"]), 8)
             self.assertTrue(any(node["rpm"] > 0 for node in state["nodes"]))
             self.assertTrue(
                 any(node["uplink_rssi_dbm"] != fanlink_cli.RSSI_UNKNOWN for node in state["nodes"])
@@ -409,12 +579,12 @@ class DemoTests(unittest.TestCase):
             )
             self.assertTrue(state["link_metrics_snapshot_fresh"])
             self.assertIsNotNone(state["diagnostic"])
-            panel.set_all_duties(list(range(16)))
-            self.assertEqual(panel.state()["duties"], list(range(16)))
+            panel.set_all_duties(list(range(8)))
+            self.assertEqual(panel.state()["duties"], list(range(8)))
             panel.disconnect()
-            self.assertEqual(panel.state()["duties"], [255] * 16)
+            self.assertEqual(panel.state()["duties"], [255] * 8)
             panel.connect("demo")
-            self.assertEqual(panel.state()["duties"], [255] * 16)
+            self.assertEqual(panel.state()["duties"], [255] * 8)
         finally:
             panel.close()
 
@@ -495,21 +665,21 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(result["state"]["duties"][1], 44)
 
-        values = list(range(16))
+        values = list(range(8))
         status, result = self.request("POST", "/api/duty/all", {"duties": values})
         self.assertEqual(status, 200)
         self.assertEqual(result["state"]["duties"], values)
         status, result = self.request("POST", "/api/duty/all", {"duty": 88})
         self.assertEqual(status, 200)
-        self.assertEqual(result["state"]["duties"], [88] * 16)
+        self.assertEqual(result["state"]["duties"], [88] * 8)
 
         status, result = self.request("POST", "/api/full", {})
         self.assertEqual(status, 200)
-        self.assertEqual(result["state"]["duties"], [255] * 16)
+        self.assertEqual(result["state"]["duties"], [255] * 8)
         status, result = self.request("POST", "/api/disconnect", {})
         self.assertEqual(status, 200)
         self.assertFalse(result["state"]["connected"])
-        self.assertEqual(result["state"]["duties"], [255] * 16)
+        self.assertEqual(result["state"]["duties"], [255] * 8)
         status, result = self.request("POST", "/api/connect", {"port": "demo"})
         self.assertEqual(status, 200)
         self.assertTrue(result["state"]["connected"])
@@ -571,6 +741,55 @@ class ApiTests(unittest.TestCase):
 
 
 class FrontendContractTests(unittest.TestCase):
+    def test_stale_node_rendering_hides_current_measurements(self) -> None:
+        javascript = PROJECT_ROOT / "panel" / "app.js"
+        script = r'''
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const makeElement = () => ({
+  textContent: '', dataset: {}, style: {}, children: [],
+  setAttribute() {}, appendChild(child) { this.children.push(child); },
+  replaceChildren() { this.children = []; }
+});
+const context = vm.createContext({
+  assert, makeElement,
+  document: { addEventListener() {}, createElement: makeElement }
+});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+vm.runInContext(`
+const view = {};
+for (const name of ['row', 'onlineText', 'rpm', 'uplinkRssi', 'downlinkRssi',
+                   'range', 'number', 'applied', 'meter', 'age', 'missed',
+                   'tags', 'dutyPercent']) view[name] = makeElement();
+nodeViews.set(1, view);
+const node = {online:true, stale:true, effective_age_seconds:3, age_100ms:30,
+              missed_polls:3, status:0, rpm:1400, applied_duty:128,
+              uplink_rssi_dbm:-16, downlink_rssi_dbm:-18};
+renderNode(1, node, 128, true, true, true);
+assert.equal(view.onlineText.textContent, '等待回传 / 降级');
+for (const name of ['rpm','uplinkRssi','downlinkRssi','applied'])
+  assert.equal(view[name].textContent, '—');
+assert.equal(view.meter.style.width, '0%');
+assert.equal(view.tags.children[0].textContent, '等待回传');
+assert.equal(view.row.dataset.fault, 'true');
+node.stale = false; node.effective_age_seconds = 0; node.age_100ms = 0;
+renderNode(1, node, 128, true, true, true);
+assert.notEqual(view.rpm.textContent, '—');
+assert.equal(view.applied.textContent, '128');
+assert.equal(view.tags.children[0].textContent, '正常');
+renderNode(1, node, 128, false, true, true);
+assert.equal(view.row.dataset.online, 'false');
+assert.equal(view.rpm.textContent, '—');
+assert.equal(view.applied.textContent, '—');
+assert.equal(nodeIsOnline({...node, online:undefined, stale:true}), false);
+assert.equal(nodeIsOnline(node, false), false);
+`, context);
+'''
+        result = subprocess.run(["node", "-e", script, str(javascript)],
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rssi_columns_and_stale_guard_are_present(self) -> None:
         html = (PROJECT_ROOT / "panel" / "index.html").read_text(encoding="utf-8")
         javascript = (PROJECT_ROOT / "panel" / "app.js").read_text(encoding="utf-8")

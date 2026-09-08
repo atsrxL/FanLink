@@ -26,7 +26,7 @@
 #endif
 
 #ifndef FANLINK_SLOT_PERIOD_US
-#define FANLINK_SLOT_PERIOD_US 10000UL
+#define FANLINK_SLOT_PERIOD_US 125000UL
 #endif
 
 #ifndef FANLINK_REPLY_DELAY_US
@@ -102,7 +102,7 @@
 #define FANLINK_RADIO_BUSY_TIMEOUT_MS 25UL
 #endif
 
-// Shared SX1280 pins for the reviewed JHEMCU Lite and BETAFPV Nano upstream
+// Shared SX1280 pins for the reviewed BETAFPV Lite (both roles) upstream
 // targets. PlatformIO supplies the board-specific RF-switch/regulator values.
 // These values still require PCB-revision and bench verification before flash.
 #ifndef FANLINK_RADIO_NSS_PIN
@@ -194,7 +194,7 @@ inline constexpr bool kGateActiveHigh = FANLINK_GATE_ACTIVE_HIGH != 0;
 inline constexpr int kStatusLedPin = FANLINK_STATUS_LED_PIN;
 inline constexpr bool kStatusLedActiveHigh = FANLINK_STATUS_LED_ACTIVE_HIGH != 0;
 
-static_assert(kNodeId >= 1 && kNodeId <= 16, "FANLINK_NODE_ID must be 1..16");
+static_assert(kNodeId >= 1 && kNodeId <= 8, "FANLINK_NODE_ID must be 1..8");
 static_assert(kTachPulsesPerRev > 0, "Tach pulses per revolution must be non-zero");
 static_assert(kRadioBusyTimeoutMs > 0U, "Radio BUSY timeout must be non-zero");
 static_assert(kRadioBusyTimeoutMs < kRxLinkTimeoutMs,

@@ -12,8 +12,14 @@ Read these files before editing code:
 
 ## Non-negotiable behavior
 
-- One TX broadcasts all 16 duty values every slot.
-- TX cycles `poll_id` from 1 through 16.
+- User revision2026-09-08 ADR-025 supersedes wire16 preservation below: native
+  eight-slot Host v2 (SET_ALL8/STATUS54/METRICS16), no legacy channel adapter.
+  RF v1 remains fixed30, with eight duty bytes and eight reserved255 bytes.
+
+- User revision 2026-09-08 (ADR-023): maximum 8 active receivers, poll1..8 at
+  125ms intervals (nominal full cycle1s). Its former wire16 migration envelope
+  is superseded by ADR-025 above.
+- TX broadcasts every active channel's full state every slot; no delta updates.
 - RX node X applies only `duty[X-1]`.
 - RX node X transmits only when `poll_id == X`.
 - Any uncertain control state biases the fan toward full speed.
@@ -42,10 +48,12 @@ Read these files before editing code:
 ## First takeover milestone
 
 1. Re-run all desktop tests.
-2. Build `fanlink_tx_esp8285`, `fanlink_rx_node01` and `fanlink_rx_node16` with real PlatformIO dependencies.
-3. Fix only concrete compiler/API issues while preserving public interfaces and protocol v1.
+2. Build `fanlink_tx_esp8285`, `fanlink_rx_node01`, `fanlink_rx_node08` and `fanlink_rx_node02_uart_diag` with real PlatformIO dependencies.
+3. Fix only concrete compiler/API issues; preserve RF v1, implement Host v2 (ADR-025).
 4. Identify the exact TX/RX boards and create board-specific pin/RF-front-end definitions.
 5. Bring up one TX + one RX at minimum safe RF power.
 6. Scope 25 kHz PWM and verify every fail-safe path.
 
-Do not start feature expansion before the first milestone is evidenced.
+The user explicitly authorizes the ADR-023 capabilities (persistent pin modes,
+power settings, TX/RX OTA and5120B/s OTA cap); this supersedes historical non-goals
+only for those features. No physical flashing or C6 deployment is authorized.

@@ -4,15 +4,19 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "fanlink/protocol.hpp"
+
 namespace fanlink {
 
 inline constexpr std::uint8_t kSerialMagic0 = 0x46U;  // 'F'
 inline constexpr std::uint8_t kSerialMagic1 = 0x4CU;  // 'L'
-inline constexpr std::uint8_t kSerialProtocolVersion = 0x01U;
+inline constexpr std::uint8_t kSerialProtocolVersion = 0x02U;
 inline constexpr std::size_t kSerialMaxPayload = 128U;
 inline constexpr std::size_t kSerialHeaderSize = 8U;
 inline constexpr std::size_t kSerialCrcSize = 2U;
-inline constexpr std::size_t kLinkMetricsPayloadSize = 32U;
+inline constexpr std::size_t kSetAllDutyPayloadSize = kNodeCount;
+inline constexpr std::size_t kStatusSnapshotPayloadSize = 6U + 6U * kNodeCount;
+inline constexpr std::size_t kLinkMetricsPayloadSize = 2U * kNodeCount;
 inline constexpr std::size_t kSerialMaxFrameSize =
     kSerialHeaderSize + kSerialMaxPayload + kSerialCrcSize;
 

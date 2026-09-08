@@ -5,6 +5,8 @@
 namespace fanlink::platform::esp8266 {
 
 bool Esp8266FanOutput::begin() {
+  initialized_ = false;
+  outputApplied_ = false;
   if (pin_ < 0 || pin_ > 16 || frequencyHz_ == 0U) {
     return false;
   }
@@ -20,6 +22,11 @@ bool Esp8266FanOutput::begin() {
 }
 
 void Esp8266FanOutput::setDuty(std::uint8_t duty) {
+  // Repeated full-state downlinks need not rebuild Arduino's PWM/NMI state.
+  // Only skip after a real write: begin() must always establish full speed.
+  if (initialized_ && outputApplied_ && duty == appliedDuty_) {
+    return;
+  }
   appliedDuty_ = duty;
   if (!initialized_) {
     return;
@@ -30,6 +37,7 @@ void Esp8266FanOutput::setDuty(std::uint8_t duty) {
   const auto gpioDuty =
       gateActiveHigh_ ? static_cast<std::uint8_t>(255U - duty) : duty;
   analogWrite(pin_, gpioDuty);
+  outputApplied_ = true;
 }
 
 }  // namespace fanlink::platform::esp8266

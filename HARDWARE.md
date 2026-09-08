@@ -1,6 +1,23 @@
+> 2026-09-08 用户最新确认 TX、RX 都是 BETAFPV 2.4GHz Lite RX。
+> 两端采用 Generic2400：无 RXEN/TXEN、LDO、默认最高芯片 +13 dBm。
+> 下方 JHEMCU/Nano 对照仅为历史画像，不再是当前 RX 构建目标。
+
 # FanLink 硬件与接线
 
-## 1. 当前目标画像（仍非可刷写板级验收）
+ADR-023 新候选支持 RX 持久化引脚角色：uart=GPIO1 TX/3 RX，pwm=GPIO1 PWM/3 Tach，
+pwmswap=GPIO3 PWM/1 Tach。PWM 的板级极性不随角色改变，改变后须重新匹配外部接线。
+RX01 缺省 pwmswap（原极性保留），RX2 UART 环境缺省 uart；新版 UART 也支持 RF OTA。
+旧 RX2 专用诊断版本没有 OTA，首次迁移仍需有线刷入。TX Lite 默认芯片 +13 dBm，
+RX Lite 同为 +13 dBm；可设范围见 `docs/CONFIG_WIRE.md`。
+官方 `betafpv.rx_2400.lite` 指向 `Generic 2400.json`，功率表仅 `[13]`，
+LED16，未定义外置 PA 开关或 DC-DC。来源与迁移边界见
+`docs/evidence/20260908-both-lite-max13.md`。旧 Nano 设置不自动跨板型继承。
+
+RX02 UART诊断特例（ADR-021）：独立`fanlink_rx_node02_uart_diag`使用GPIO1=TX、
+GPIO3=RX，禁用实际PWM/Tach；必须断开风扇信号线路。正常RX02配置不变。
+详见`docs/RX2_UART_DIAGNOSTIC.md`。
+
+## 1. 历史目标画像（已由上方双 Lite 更正替代）
 
 用户已指定：
 

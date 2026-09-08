@@ -6,7 +6,9 @@
 
 namespace fanlink {
 
-inline constexpr std::uint8_t kNodeCount = 16U;
+inline constexpr std::uint8_t kNodeCount = 8U;
+inline constexpr std::uint32_t kNormalSlotPeriodUs = 125000U;
+inline constexpr std::uint32_t kTxTelemetryFreshnessMs = 2500U;
 inline constexpr std::uint8_t kAirMagic0 = 0xF1U;
 inline constexpr std::uint8_t kAirMagic1 = 0xA5U;
 inline constexpr std::uint8_t kProtocolVersion = 0x01U;
