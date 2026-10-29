@@ -68,6 +68,8 @@ class IRxMaintenance {
   virtual ~IRxMaintenance() = default;
   virtual void tick(std::uint32_t nowMs) = 0;
   virtual bool active() const = 0;
+  // Read-only diagnostic replies may opt out; maintenance defaults stay safe.
+  virtual bool replyRequiresFullSpeed() const { return true; }
   virtual bool handle(const std::uint8_t* data, std::size_t length,
                       std::uint8_t* reply, std::size_t& replyLength,
                       std::uint32_t nowMs) = 0;
@@ -96,11 +98,28 @@ struct TachSample {
   bool valid{false};
 };
 
+// Lifetime (since begin/boot) saturating counters, never reset by sampling.
+struct TachDiagnostics {
+  std::uint32_t rawEdges{0};       // All falling ISR edges, including overflow.
+  std::uint32_t validPeriods{0};   // Newly accepted estimator updates, not reads.
+  std::uint32_t filterRejects{0};  // Rejected edges/windows; excludes warmup.
+  // UINT32_MAX means never seen; known age saturates at UINT32_MAX-1.
+  std::uint32_t lastEdgeAgeUs{UINT32_MAX};
+  std::uint32_t overflowDrops{0};  // ISR edges not stored in the bounded ring.
+  bool enabled{false};
+};
+
 class ITachometer {
  public:
   virtual ~ITachometer() = default;
   virtual bool begin() = 0;
   virtual TachSample sample(std::uint32_t nowUs) = 0;
+  // Snapshot only: must not drain edges, update the estimator or reset counters.
+  // May advance age-only wrap bookkeeping; periodically called even without RF.
+  virtual TachDiagnostics diagnostics(std::uint32_t nowUs) {
+    (void)nowUs;
+    return {};
+  }
 };
 
 }  // namespace fanlink

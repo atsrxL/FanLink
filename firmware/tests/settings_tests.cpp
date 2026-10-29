@@ -34,6 +34,88 @@ struct Update : ota::IUpdateStorage {
 static std::array<std::uint8_t, 4096> flash{};
 static int readError = 0, eraseError = 0, writeError = 0;
 static bool corruptWrite = false;
+static void fallbackMatrix() {
+  // TX plus all eight RX identities, both supported profiles and every pin
+  // role. CRC-valid semantic faults must be rejected as well as bit damage.
+  for (auto profile : {Profile::Lite, Profile::Nano}) {
+    const std::int8_t power = profile == Profile::Lite ? 13 : 1;
+    for (std::uint8_t node = 0; node <= 8; ++node) {
+      for (auto mode : {PinMode::Uart, PinMode::Pwm, PinMode::PwmSwap}) {
+        if (node == 0 && mode != PinMode::Uart) continue;
+        const auto compiled = node == 0 ? PinMode::NotApplicable : mode;
+        Store original; Reply reply{};
+        SettingsService initial(original,1234,node,profile,compiled,power);
+        assert(initial.begin() && !initial.invalidRecord());
+        assert(original.writes == 0 && initial.selected().mode == compiled);
+        // Save an override that differs from the default, then change the
+        // compiled mode to prove a valid record wins without any rewriting.
+        const std::int8_t savedPower = profile == Profile::Lite ? 0 : -6;
+        assert(initial.process({1234,1,node,Operation::SetPower,static_cast<std::uint8_t>(savedPower)},reply,0));
+        const auto changedDefault = node == 0 ? compiled :
+            (mode == PinMode::Uart ? PinMode::PwmSwap : PinMode::Uart);
+        SettingsService saved(original,1234,node,profile,changedDefault,power);
+        assert(saved.begin() && !saved.invalidRecord() && !saved.pending());
+        assert(saved.selected().mode == compiled && saved.selected().powerDbm == savedPower);
+        assert(original.writes == 1);
+        for (int fault = -1; fault <= 33; ++fault) {
+          Store bad = original;
+          if (fault == -1) bad.readOk = false;
+          else if (fault < 24) bad.bytes[fault] ^= 1;
+          else {
+            const unsigned offsets[] = {0,3,4,5,6,7,8,12,16,21};
+            const auto offset = offsets[fault - 24];
+            bad.bytes[offset] = (offset == 6 || offset == 7) ? 127 : bad.bytes[offset] ^ 1;
+            seal(bad.bytes.data(),bad.bytes.size());
+          }
+          const auto damaged = bad.bytes;
+          SettingsService fallback(bad,1234,node,profile,compiled,power);
+          assert(fallback.begin() && fallback.invalidRecord() && !fallback.pending());
+          assert(fallback.selected().mode == compiled && fallback.selected().powerDbm == power);
+          assert(bad.writes == 1 && bad.bytes == damaged);
+          assert(fallback.process({1234,2,node,Operation::Query,0},reply,0));
+          assert(reply.status == Status::Ok && reply.flags == 2 && reply.mode == compiled);
+          std::array<std::uint8_t,kPacketSize> packet{}; Reply decoded{};
+          assert(encodeReply(reply,packet) && decodeReply(packet.data(),packet.size(),decoded));
+          assert(decoded.flags == 2 && decoded.powerDbm == power && bad.writes == 1);
+          // Query/boot never hide the fault or write. A failed explicit save
+          // preserves the working defaults, diagnostic and damaged record.
+          assert(fallback.begin() && fallback.invalidRecord() && bad.writes == 1);
+          bad.writeOk = false;
+          const Request repair{1234,3,node,Operation::SetPower,static_cast<std::uint8_t>(power)};
+          assert(fallback.process(repair,reply,10) && reply.status == Status::StorageError);
+          assert(reply.flags == 2 && !fallback.pending() && bad.bytes == damaged);
+          assert(fallback.selected().mode == compiled && fallback.selected().powerDbm == power);
+          bad.writeOk = true;
+          assert(fallback.process(repair,reply,20) && reply.status == Status::Ok);
+          assert(reply.flags == 1 && !fallback.invalidRecord() && fallback.pending());
+          assert(bad.writes == 3 && !fallback.rebootDue(2519) && fallback.rebootDue(2520));
+          assert(fallback.process(repair,reply,100) && bad.writes == 3);
+          bad.readOk = true;
+          assert(fallback.begin() && !fallback.invalidRecord() && !fallback.pending());
+          assert(fallback.selected().mode == compiled && fallback.selected().powerDbm == power);
+        }
+      }
+    }
+  }
+  // Invalid compiled defaults remain a separate non-operational build error;
+  // neither valid stored values nor a remote setting may bypass that guard.
+  for (unsigned fault = 0; fault < 6; ++fault) {
+    Store store;
+    SettingsService bad(store,1234,fault == 0 ? 9 : fault == 1 ? 0 : 1,
+        fault == 2 ? static_cast<Profile>(99) : Profile::Lite,
+        fault == 3 ? PinMode::Safe : fault == 4 ? PinMode::NotApplicable : PinMode::Pwm,
+        fault == 5 ? 14 : 13);
+    assert(!bad.begin() && bad.invalidRecord() && !bad.pending());
+    if (fault != 0) {
+      Reply reply{};
+      for (auto op : {Operation::Query,Operation::SetPinMode,Operation::SetPower}) {
+        assert(bad.process({1234,1,static_cast<std::uint8_t>(fault == 1 ? 0 : 1),op,0},reply,0));
+        assert(reply.status == Status::Unsupported && reply.flags == 2);
+      }
+    }
+    assert(store.writes == 0);
+  }
+}
 extern "C" std::int32_t flash_hal_read(std::uint32_t addr, std::uint32_t n, std::uint8_t* b) {
   assert(addr == 0xFB000 && n <= flash.size());
   if (!readError) std::memcpy(b, flash.data(), n); return readError;
@@ -48,6 +130,7 @@ extern "C" std::int32_t flash_hal_write(std::uint32_t addr, std::uint32_t n, con
   return writeError;
 }
 int main() {
+  fallbackMatrix();
   // Both deployed boards are Lite: max defaults, saved overrides and strict
   // cross-profile isolation must all survive the Nano-to-Lite correction.
   for (std::uint8_t node : {0, 2}) {
@@ -61,8 +144,8 @@ int main() {
     SettingsService restart(s,1234,node,Profile::Lite,mode,13);
     assert(restart.begin() && restart.selected().powerDbm == 0 && s.writes == 1);
     s.bytes[0] ^= 1;
-    assert(!restart.begin() && restart.selected().powerDbm == -18);
-    assert(restart.selected().mode == (node == 0 ? PinMode::NotApplicable : PinMode::Safe));
+    assert(restart.begin() && restart.invalidRecord() && restart.selected().powerDbm == 13);
+    assert(restart.selected().mode == mode && s.writes == 1);
   }
   {
     Store s; Reply r{};
@@ -70,8 +153,9 @@ int main() {
     assert(oldNano.begin());
     assert(oldNano.process({1234,1,2,Operation::SetPower,static_cast<std::uint8_t>(-3)},r,0));
     SettingsService lite(s,1234,2,Profile::Lite,PinMode::Uart,13);
-    assert(!lite.begin() && lite.invalidRecord() && lite.selected().powerDbm == -18);
-    assert(lite.process({1234,2,2,Operation::SetPower,13},r,0) && r.status == Status::BadRequest);
+    assert(lite.begin() && lite.invalidRecord() && lite.selected().powerDbm == 13);
+    assert(lite.process({1234,2,2,Operation::SetPower,13},r,0) && r.status == Status::Ok);
+    assert(lite.begin() && !lite.invalidRecord() && lite.selected().mode == PinMode::Uart);
     assert(lite.process({1234,3,2,Operation::SetPinMode,0},r,0) && r.status == Status::Ok);
     assert(lite.begin() && lite.selected().mode == PinMode::Uart);
     assert(lite.process({1234,4,2,Operation::SetPower,13},r,0) && r.status == Status::Ok);
@@ -130,20 +214,22 @@ int main() {
   for (unsigned i = 0; i < kRecordSize; ++i) {
     Store bad = store; bad.bytes[i] ^= 1;
     SettingsService corrupt(bad,1234,2,Profile::Nano,PinMode::Pwm,-6);
-    assert(!corrupt.begin() && corrupt.invalidRecord() && corrupt.selected().mode == PinMode::Safe);
+    assert(corrupt.begin() && corrupt.invalidRecord() && corrupt.selected().mode == PinMode::Pwm);
+    assert(corrupt.selected().powerDbm == -6);
     assert(corrupt.process({1234,1,2,Operation::Query,0},reply,0));
     assert(encodeReply(reply,wire) && decodeReply(wire.data(),wire.size(),parsed) && parsed.flags == 2);
-    assert(corrupt.process(req,reply,0) && reply.status == Status::BadRequest);
+    assert(corrupt.process(req,reply,0) && reply.status == Status::Ok);
+    assert(corrupt.begin() && !corrupt.invalidRecord() && corrupt.selected().mode == PinMode::Pwm);
     assert(corrupt.process({1234,6,2,Operation::SetPinMode,2},reply,10) && reply.status == Status::Ok);
     assert(corrupt.pending() && !corrupt.invalidRecord() && corrupt.selected().mode == PinMode::PwmSwap);
   }
   Store unread; unread.readOk = false;
   SettingsService failed(unread,1234,2,Profile::Nano,PinMode::Pwm,-6);
-  assert(!failed.begin() && failed.invalidRecord());
+  assert(failed.begin() && failed.invalidRecord() && failed.selected().mode == PinMode::Pwm);
   for (auto byte : {3,4,5,8,12}) {
     Store foreign = store; foreign.bytes[byte] ^= 1; seal(foreign.bytes.data(),foreign.bytes.size());
     SettingsService isolated(foreign,1234,2,Profile::Nano,PinMode::Pwm,-6);
-    assert(!isolated.begin() && isolated.invalidRecord());
+    assert(isolated.begin() && isolated.invalidRecord() && isolated.selected().mode == PinMode::Pwm);
   }
   Store txStore;
   SettingsService tx(txStore,1234,0,Profile::Lite,PinMode::NotApplicable,13);

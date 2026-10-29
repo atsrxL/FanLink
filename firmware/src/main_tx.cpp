@@ -15,6 +15,7 @@
 #include "fanlink/ota_tx_local.hpp"
 #include "fanlink/tx_lifecycle.hpp"
 #include "fanlink/settings_tx.hpp"
+#include "fanlink/tach_diagnostic.hpp"
 #include "fanlink/platform/esp8266/settings_store.hpp"
 #include "fanlink/platform/esp8266/ota_storage.hpp"
 #include "fanlink/byte_utils.hpp"
@@ -61,6 +62,7 @@ TxController controller(
     TxControllerConfig{fanlink::build::kNetworkId, fanlink::build::kHostTimeoutMs,
                        fanlink::build::kSlotPeriodUs, fanlink::build::kReplyTimeoutMs});
 fanlink::ota::TxBridge otaBridge(radioPort, clockPort, controller, fanlink::build::kNetworkId);
+fanlink::tachdiag::TxBridge tachBridge(radioPort, clockPort, fanlink::build::kNetworkId);
 const auto otaImageIdentity PROGMEM = fanlink::ota::imageIdentity(1);
 std::array<std::uint8_t, 28> loadOtaIdentity() {
   std::array<std::uint8_t, 28> identity{};
@@ -116,6 +118,15 @@ TxDiagnosticAttempt writeOptionalDiagnostic(const char* message, std::size_t cou
 }
 
 void handleHostFrame(const SerialFrame& frame) {
+  if (frame.type == fanlink::tachdiag::kHostRequest) {
+    (void)tachBridge.enqueue(frame.payload.data(), frame.payloadLength, frame.sequence,
+        otaBridge.active() || localUpdate.active() || lifecycle.active() || settingsBridge.active());
+    return;
+  }
+  if (tachBridge.active()) {
+    (void)fanlink::handleHostControlFrame(frame, controller);
+    return;
+  }
   if (frame.type == 0x15) {
     (void)settingsBridge.enqueue(frame.payload.data(), frame.payloadLength, frame.sequence,
         otaBridge.active() || localUpdate.active() || lifecycle.active());
@@ -338,6 +349,15 @@ void setup() {
 
 void loop() {
   serviceHostInput();
+  tachBridge.service();
+  fanlink::tachdiag::Packet tachReply{}; std::uint16_t tachSequence = 0;
+  if (tachBridge.replyReady(tachReply, tachSequence)) {
+    SerialFrame frame{}; frame.type = fanlink::tachdiag::kHostReply;
+    frame.sequence = tachSequence; frame.payloadLength = tachReply.size();
+    std::copy(tachReply.begin(), tachReply.end(), frame.payload.begin());
+    tachBridge.replyWritten(writeDiagnosticFrame(frame));
+  }
+  if (tachBridge.waiting()) { yield(); return; }
   const bool wasSettings = settingsBridge.active();
   const bool settingsService = settingsBridge.service();
   std::array<std::uint8_t, 30> settingsReply{};
@@ -411,6 +431,7 @@ void loop() {
   if (controller.runScheduledSlot()) {
     lastScheduledStartUs = scheduledStartUs;
     haveScheduledStart = true;
+    tachBridge.startAfterSlot();
   }
   // The production C6 freshness path takes precedence over optional text.
   // Quiet iterations drain at most one nonblocking UART frame. Keeping this

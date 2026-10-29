@@ -24,9 +24,9 @@ transaction ID. Replies must match network,session,node,operation and value.
 |14|1|query0; mode0 UART/1 PWM/2 PWMSWAP; signed chip dBm power|echo|
 |15|1|0|status0 Ok/1 BadRequest/2 Unsupported/3 Busy/4 StorageError/5 RadioError|
 |16|1|0|profile1 Lite /2 Nano|
-|17|1|0|selected mode0/1/2; corrupt RX safe=254 with flags bit1; TX=255|
+|17|1|0|selected mode0/1/2; legacy safe=254 accepted for explicit repair; TX=255|
 |18|1|0|selected signed chip dBm power|
-|19|1|0|flags bit0 pending restart/apply; bit1 invalid persistent record (safe mode)|
+|19|1|0|flags bit0 pending restart/apply; bit1 invalid persistent record (validated compiled defaults under ADR-026)|
 |20|4|0|capability bitmask|
 |24|2|0|OTA image-byte cap5120|
 |26|1|0|max receivers8|
@@ -42,8 +42,9 @@ Power uses chip dBm to avoid confusing external PA input with radiated power:
 Lite accepts -18..13dBm; Nano accepts the official table -10/-6/-3/1dBm
 (nominal10/25/50/100mW board levels, not measured). Current TX and all RX builds
 are BETAFPV Lite, default13; Nano bounds remain protocol support only. Existing
-Nano records are rejected by Lite firmware: explicitly restore the RX pin mode
-before setting power. Valid same-profile saved values override defaults.
+Nano records are rejected by Lite firmware: use validated compiled defaults
+and report flags bit1 until an explicit setting save. Valid same-profile,
+same-node/network saved values override defaults.
 CLI must show both profile and allowed values and reject unsupported
 requests. Pin modes do not change each board's established PWM gate polarity.
 
@@ -61,9 +62,12 @@ A query after reboot verifies selected settings. Power changes also
 may reboot for atomic application; callers must tolerate loss of the old link.
 
 Settings storage must validate magic/schema/profile/network/node/CRC and bounded
-values; erased storage uses compile-time defaults. Corrupt storage must not
-enable UART or drive an unknown pin role; expose safe-mode status and accept
-repair settings. Write failures must not silently apply/reboot a new selection.
+values; erased storage uses compile-time defaults. Under ADR-026 corrupt or
+unreadable storage also uses validated compiled defaults, with flags bit1 set.
+No automatic persistence occurs; explicit mode or power save repairs the record.
+Legacy mode254 plus bit1 remains accepted for explicit old-image repair.
+Invalid compiled defaults are not operational fallback candidates.
+Write failures must not silently apply/reboot a new selection.
 No ACK to a wrong network/node, bad CRC or malformed envelope. No implicit
 Flash writes on boot/query/normal poll. Firmware OTA keeps configuration storage.
 Storage uses one reserved EEPROM sector with checked erase/write/readback, not a

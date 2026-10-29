@@ -153,7 +153,8 @@ class Uploader:
                  sleep: Callable[[float], None] = time.sleep,
                  mode: str = "legacy", rate: int = FAST_RATE_LIMIT,
                  target: str = "rx",
-                 progress: Optional[Callable[[int, int], None]] = None) -> None:
+                 progress: Optional[Callable[[int, int], None]] = None,
+                 observer: Optional[Callable[[dict], None]] = None) -> None:
         self.serial = serial_port
         self.image = image
         # An explicit target is mandatory for TX; never infer it from an image or ACK.
@@ -182,6 +183,31 @@ class Uploader:
         self.sequence = secrets.randbelow(65536)
         self.committed = False
         self.commit_sent = False
+        self.observer = observer
+        self.started_at = self.clock()
+        self._stats = dict.fromkeys((
+            "attempts", "retries", "timeouts", "bad_offsets", "acks",
+            "rejections", "io_errors", "parsed_frames", "ignored_frames",
+            "invalid_acks", "observer_errors"), 0)
+
+    @property
+    def stats(self) -> dict:
+        """Cumulative attempt counters, including maintenance and Abort exchanges.
+
+        ACKs count only fully accepted responses; bad_offsets only recoverable
+        fast-block NACKs. A timeout cannot identify which RF direction lost data.
+        The returned copy and observer event copies cannot mutate bookkeeping.
+        """
+        return dict(self._stats)
+
+    def _observe(self, event: dict) -> None:
+        # Observers are diagnostics, not a cancellation mechanism. Use progress
+        # to stop pre-Commit, so a logging error cannot break commit accounting.
+        if self.observer is not None:
+            try:
+                self.observer(dict(event, stats=self.stats))
+            except Exception:
+                self._stats["observer_errors"] += 1
 
     def exchange(self, operation: Op, offset: int, data: bytes,
                  expected_state: State, expected_offset: int, *, attempts: Optional[int] = None,
@@ -191,7 +217,7 @@ class Uploader:
         request = encode_frame(self.fast_request_type if fast_payload is not None else self.request_type,
                                sequence, fast_payload if fast_payload is not None else
                                encode_request(self.image, self.session, operation, offset, data))
-        for _ in range(self.attempts if attempts is None else attempts):
+        for attempt in range(1, (self.attempts if attempts is None else attempts) + 1):
             if fast_payload is not None:
                 now = self.clock()
                 if now < self.next_fast_send:
@@ -201,24 +227,53 @@ class Uploader:
                 self.next_fast_send = self.clock() + fast_count / self.rate
             if operation == Op.COMMIT:
                 self.commit_sent = True
-            written = self.serial.write(request)
-            if written != len(request):
-                raise FanLinkError(f"short serial write: {written}/{len(request)}")
-            self.serial.flush()
+            self._stats["attempts"] += 1
+            self._stats["retries"] += int(attempt > 1)
+            sent_at = self.clock()
+
+            def completed(outcome: str, ack: Optional[Ack] = None) -> None:
+                ended_at = self.clock()
+                self._observe(dict(
+                    operation=operation.name, operation_code=int(operation),
+                    sequence=sequence, attempt=attempt, offset=offset,
+                    block_offset=expected_offset - fast_count if fast_payload is not None else None,
+                    expected_offset=expected_offset, elapsed=ended_at - self.started_at,
+                    rtt=ended_at - sent_at, outcome=outcome,
+                    status=ack.status if ack is not None else None,
+                    ack_offset=ack.offset if ack is not None else None))
+
+            try:
+                written = self.serial.write(request)
+                if written != len(request):
+                    raise FanLinkError(f"short serial write: {written}/{len(request)}")
+                self.serial.flush()
+            except (Exception, KeyboardInterrupt):
+                self._stats["io_errors"] += 1
+                completed("io_error")
+                raise
             deadline = self.clock() + (self.begin_timeout if operation == Op.BEGIN else self.timeout)
             retry_batch = False
             while self.clock() < deadline:
-                waiting = getattr(self.serial, "in_waiting", 0)
-                chunk = self.serial.read(min(waiting, 4096) if waiting else 1)
+                try:
+                    waiting = getattr(self.serial, "in_waiting", 0)
+                    chunk = self.serial.read(min(waiting, 4096) if waiting else 1)
+                except (Exception, KeyboardInterrupt):
+                    self._stats["io_errors"] += 1
+                    completed("io_error")
+                    raise
                 for frame in self.parser.feed(chunk):
+                    self._stats["parsed_frames"] += 1
                     if frame.message_type != self.reply_type or frame.sequence != sequence:
+                        self._stats["ignored_frames"] += 1
                         continue
                     try:
                         ack = decode_ack(frame.payload)
                     except FanLinkError:
+                        self._stats["invalid_acks"] += 1
                         continue
                     if (ack.network, ack.session, ack.node, ack.operation) != (
                             self.image.network, self.session, self.image.node, operation):
+                        self._stats["ignored_frames"] += 1
                         continue
                     if ack.status != 0:
                         if (fast_payload is not None and ack.status == 3
@@ -228,17 +283,27 @@ class Uploader:
                             # Lost RF fragments: RX retains the partial block. Replay
                             # the identical bounded batch, never advance on a NACK.
                             retry_batch = True
+                            self._stats["bad_offsets"] += 1
+                            completed("bad_offset", ack)
                             break
+                        self._stats["rejections"] += 1
+                        completed("rejected", ack)
                         raise FanLinkError(f"receiver rejected {operation.name}: {STATUS_NAMES[ack.status]} "
                                            f"(state={ack.state.name}, offset={ack.offset}, "
                                            f"expected compat=0x{self.image.compatibility:08X}, "
                                            f"receiver compat=0x{ack.compatibility:08X})")
                     if (ack.compatibility != self.image.compatibility
                             or ack.state != expected_state or ack.offset != expected_offset):
+                        self._stats["ignored_frames"] += 1
                         continue
+                    self._stats["acks"] += 1
+                    completed("ack", ack)
                     return ack
                 if retry_batch:
                     break
+            if not retry_batch:
+                self._stats["timeouts"] += 1
+                completed("timeout")
         raise FanLinkError(f"{operation.name}: no matching receiver ACK after retries")
 
     def upload(self) -> None:

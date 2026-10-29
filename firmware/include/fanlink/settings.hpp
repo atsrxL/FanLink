@@ -102,28 +102,32 @@ class SettingsService {
       : store_(store), network_(network), node_(node), profile_(profile),
         defaults_{defaultMode, defaultPower}, selected_(defaults_) {}
   bool begin() {
-    pending_ = false; invalid_ = false; selected_ = defaults_;
+    pending_ = false; invalid_ = false; defaultsValid_ = false; selected_ = defaults_;
     if (node_ > 8 || !validPower(profile_, defaults_.powerDbm) ||
         (node_ == 0 ? defaults_.mode != PinMode::NotApplicable : !validMode(defaults_.mode))) {
-      makeSafe(); return false;
+      rejectInvalidDefaults(); return false;
     }
+    defaultsValid_ = true;
     std::array<std::uint8_t, kRecordSize> b{};
-    if (!store_.read(b.data(), b.size())) { makeSafe(); return false; }
+    // An unreadable/foreign/corrupt record is not an alternative operating
+    // mode. Use this image's validated board/node defaults without writing
+    // Flash; flag the rejected storage until an explicit setting is saved.
+    if (!store_.read(b.data(), b.size())) { invalid_ = true; return true; }
     if (std::all_of(b.begin(), b.end(), [](std::uint8_t v) { return v == 255; })) return true;
     if (b[0] != 'F' || b[1] != 'L' || b[2] != 'S' || b[3] != 1 ||
         b[4] != static_cast<std::uint8_t>(profile_) || b[5] != node_ ||
         get32(b.data() + 8) != network_ || !crcValid(b.data(), b.size()) ||
         !validPower(profile_, static_cast<std::int8_t>(b[7])) ||
         (node_ == 0 ? b[6] != 255 : !validMode(static_cast<PinMode>(b[6])))) {
-      makeSafe(); return false;
+      invalid_ = true; return true;
     }
-    for (unsigned i = 12; i < 22; ++i) if (b[i]) { makeSafe(); return false; }
+    for (unsigned i = 12; i < 22; ++i) if (b[i]) { invalid_ = true; return true; }
     selected_ = {static_cast<PinMode>(b[6]), static_cast<std::int8_t>(b[7])}; return true;
   }
   bool process(const Request& r, Reply& reply, std::uint32_t now, bool maintenanceBusy = false) {
     if (!validRequest(r) || r.networkId != network_ || r.nodeId != node_) return false;
-    Status status = Status::Ok;
-    if (r.operation != Operation::Query) {
+    Status status = defaultsValid_ ? Status::Ok : Status::Unsupported;
+    if (defaultsValid_ && r.operation != Operation::Query) {
       if (pending_) status = sameRequest(r, pendingRequest_) ? Status::Ok : Status::Busy;
       else if (maintenanceBusy) status = Status::Busy;
       else {
@@ -136,8 +140,7 @@ class SettingsService {
           if (!validPower(profile_, static_cast<std::int8_t>(r.value))) status = Status::BadRequest;
           else next.powerDbm = static_cast<std::int8_t>(r.value);
         }
-        // Repair requires explicitly choosing a pin role first; a power-only
-        // request must never silently pick UART/PWM from corrupt storage.
+        // Both explicit setters can persist the validated fallback selection.
         if (status == Status::Ok && node_ != 0 && !validMode(next.mode)) status = Status::BadRequest;
         if (status == Status::Ok && (invalid_ || next.mode != selected_.mode || next.powerDbm != selected_.powerDbm)) {
           std::array<std::uint8_t, kRecordSize> b{};
@@ -159,7 +162,9 @@ class SettingsService {
   bool invalidRecord() const { return invalid_; }
   bool rebootDue(std::uint32_t now) const { return pending_ && std::uint32_t(now - pendingMs_) >= kApplyGraceMs; }
  private:
-  void makeSafe() { invalid_ = true; selected_.mode = node_ == 0 ? PinMode::NotApplicable : PinMode::Safe;
+  // A broken build profile is distinct from rejected EEPROM. Never guess a
+  // working GPIO role or allow a setting request to repair invalid firmware.
+  void rejectInvalidDefaults() { invalid_ = true; selected_.mode = node_ == 0 ? PinMode::NotApplicable : PinMode::Safe;
     selected_.powerDbm = profile_ == Profile::Nano ? -10 : -18; }
   ISettingsStore& store_;
   const std::uint32_t network_;
@@ -167,7 +172,7 @@ class SettingsService {
   const Profile profile_;
   const Selection defaults_;
   Selection selected_;
-  bool invalid_{false}, pending_{false};
+  bool invalid_{false}, pending_{false}, defaultsValid_{false};
   Request pendingRequest_{};
   std::uint32_t pendingMs_{0};
 };

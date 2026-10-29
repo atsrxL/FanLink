@@ -10,6 +10,7 @@ extern "C" {
 #include "fanlink/ota_identity.hpp"
 #include "fanlink/ota_receiver.hpp"
 #include "fanlink/settings_rx_maintenance.hpp"
+#include "fanlink/tach_diagnostic.hpp"
 #include "fanlink/rx_uart_diagnostic.hpp"
 #include "fanlink/platform/esp8266/settings_store.hpp"
 #include "fanlink/platform/esp8266/runtime_rx_pins.hpp"
@@ -53,6 +54,7 @@ fanlink::diagnostic::ObservedRadio radioPort(hardwareRadio);
 fanlink::diagnostic::Logger logger;
 bool uartMode{false};
 std::uint32_t lastTraceMs{0};
+std::uint32_t lastTachDiagnosticAgeMs{0};
 
 void serviceRadioTrace() {
   const auto nowMs = clockPort.millis();
@@ -90,7 +92,9 @@ fanlink::settings::SettingsService settingsService(settingsStore,
     fanlink::settings::Profile::Lite, defaultPinMode, fanlink::build::kRadioOutputPowerDbm);
 fanlink::ota::Receiver otaReceiver(otaStorage, fanOutput, fanlink::build::kNetworkId,
     fanlink::build::kNodeId, fanlink::ota::compatibilityId());
-fanlink::settings::RxMaintenance maintenance(settingsService, otaReceiver, fanOutput);
+fanlink::settings::RxMaintenance settingsMaintenance(settingsService, otaReceiver, fanOutput);
+fanlink::tachdiag::RxMaintenance maintenance(settingsMaintenance, tachometer, clockPort,
+    fanlink::build::kNetworkId, fanlink::build::kNodeId);
 const auto otaImageIdentity PROGMEM = fanlink::ota::imageIdentity(2);
 RxController controller(
     radioPort, clockPort, fanOutput, tachometer,
@@ -134,6 +138,13 @@ void setup() {
 void loop() {
   if (uartMode) logger.noteLoop(clockPort.micros());
   controller.runOnce();
+  // Advance only diagnostic age bookkeeping while control is absent. This
+  // does not drain/filter tach samples, reset counters or change the fan.
+  const auto nowMs = clockPort.millis();
+  if (static_cast<std::uint32_t>(nowMs - lastTachDiagnosticAgeMs) >= 1000U) {
+    (void)tachometer.diagnostics(clockPort.micros());
+    lastTachDiagnosticAgeMs = nowMs;
+  }
   if (otaReceiver.rebootDue(clockPort.millis()) || settingsService.rebootDue(clockPort.millis())) {
     fanOutput.setFullSpeed();
     ESP.restart();

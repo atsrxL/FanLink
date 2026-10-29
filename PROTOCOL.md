@@ -1,5 +1,31 @@
 # FanLink Protocol — Host v2 / RF v1
 
+## Read-only tach diagnostic query (2026-09-11, ADR-027; candidate)
+
+Separate fixed30-byte RF types0x42 request/0x43 reply, encapsulated unchanged
+in Host v2 types0x16/0x94. No Control/RPM reserved bytes are repurposed. Header
+offset0..3 is F1 A5 01 TYPE, network uint32LE@4, nonzero session uint32LE@8,
+node1..8@12, CRC16LE@28 over0..27. Request13..27 must all be zero.
+
+Reply13 is flags (bit0=tach enabled; bits1..7 zero). rawEdges uint32LE@14,
+validPeriods uint32LE@18, filterRejects uint32LE@22, raw lastEdgeAgeMs uint16LE@26.
+Age65535 means never observed; known age floors microseconds to milliseconds
+and saturates65534. Counters saturate32 bits since boot; no query clears them.
+rawEdges includes ISR queue overflow; validPeriods counts newly trusted
+estimator updates, not snapshot reads; rejects excludes warmup. Extra local
+overflowDrops instrumentation is not included in this minimal wire reply.
+
+TX matches exact envelope/network/node/session and echoes Host sequence; bad
+or late responses never refresh normal RPM/node presence. Requests are explicit,
+limited to one exchange per second, no automatic RF retry, and at most20ms
+reply observation after transmission. TX starts after a normal control slot;
+normal control and heartbeat parsing remain live. OTA/settings ownership excludes
+diagnostics. RX diagnostic replies do not change duty, pin mode, persistence,
+control watchdog timestamps or sampling state. Existing fail-safe still applies.
+Old firmware need not understand this optional query; timeout is unknown, not
+zero. Both TX and RX upgrades are required; this change is not deployed.
+Usage and interpretation: docs/TACH_DIAGNOSTICS.md.
+
 ## Current compact8 contract (2026-09-08, ADR-025)
 
 Host 串口所有外层帧统一 `VERSION=2`：控制、状态、RSSI、诊断、OTA、设置及

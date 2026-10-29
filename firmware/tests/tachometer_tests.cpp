@@ -63,9 +63,81 @@ void test(const std::string& name) {
   if (name == "zero") clockUs = 0U;
   if (name == "wrap") clockUs = UINT32_MAX - 80000U;
   Esp8266Tachometer tach(1, 2U, timeoutUs, 250U, 30000U);
+  check(!tach.diagnostics(clockUs).enabled, "uninitialized diagnostics enabled");
   expectInvalid(tach);
   check(tach.begin(), "begin failed");
   expectInvalid(tach);
+  const auto empty = tach.diagnostics(clockUs);
+  check(empty.enabled && empty.rawEdges == 0U && empty.validPeriods == 0U &&
+        empty.filterRejects == 0U && empty.overflowDrops == 0U &&
+        empty.lastEdgeAgeUs == UINT32_MAX, "empty diagnostics incorrect");
+  if (name == "diagnostics") {
+    // Snapshot before sampling sees ISR edges, but must not drain the ring or
+    // manufacture accepted windows. First edge + four periods is only warmup.
+    for (unsigned i = 0; i < 5U; ++i) edgeAfter(20000U);
+    auto d = tach.diagnostics(clockUs - 100U);
+    check(d.rawEdges == 5U && d.validPeriods == 0U && d.filterRejects == 0U &&
+          d.lastEdgeAgeUs == 0U, "snapshot before drain incorrect");
+    expectInvalid(tach);
+    d = tach.diagnostics(clockUs);
+    check(d.validPeriods == 0U && d.filterRejects == 0U, "warmup counted as rejection");
+    edgeAfter(20000U);
+    expectRpm(tach, 1500U, 1U);
+    for (unsigned i = 0; i < 100U; ++i) {
+      d = tach.diagnostics(clockUs);
+      check(d.rawEdges == 6U && d.validPeriods == 1U && d.filterRejects == 0U,
+            "read-only diagnostics changed counters");
+    }
+    clockUs += 123U;
+    check(tach.diagnostics(clockUs).lastEdgeAgeUs == 123U, "raw age incorrect");
+    edgeAfter(500U);
+    expectRpm(tach, 1500U, 1U);
+    d = tach.diagnostics(clockUs);
+    check(d.rawEdges == 7U && d.validPeriods == 1U && d.filterRejects == 1U &&
+          d.lastEdgeAgeUs == 0U, "short rejected raw edge not counted");
+    // Saturating accumulated age survives multiple micros wraps with ordinary
+    // loop sampling; new edge reestablishes age without clearing any counters.
+    for (unsigned i = 0; i < 10U; ++i) {
+      clockUs += 1000000000U;
+      expectInvalid(tach);
+    }
+    check(tach.diagnostics(clockUs).lastEdgeAgeUs == UINT32_MAX - 1U,
+          "quiet input became fresh after clock wrap");
+    edgeAfter(100U);
+    check(tach.diagnostics(clockUs).lastEdgeAgeUs == 0U, "new raw edge did not reset age");
+    // Without Control packets sample() may not run at all: periodic diagnostic
+    // snapshots alone must keep age across multiple micros wraps, without
+    // consuming this queued edge or changing any estimator/counter state.
+    const auto beforeQuiet = tach.diagnostics(clockUs);
+    for (unsigned i = 0; i < 10U; ++i) {
+      clockUs += 1000000000U;
+      const auto quiet = tach.diagnostics(clockUs);
+      check(quiet.rawEdges == beforeQuiet.rawEdges &&
+            quiet.validPeriods == beforeQuiet.validPeriods &&
+            quiet.filterRejects == beforeQuiet.filterRejects,
+            "diagnostic-only age tick changed estimator counters");
+    }
+    check(tach.diagnostics(clockUs).lastEdgeAgeUs == UINT32_MAX - 1U,
+          "diagnostic-only age tick lost quiet time across wrap");
+    // This queued edge is now stale; sampling must still see and reject it.
+    expectInvalid(tach);
+    check(tach.diagnostics(clockUs).filterRejects == 2U,
+          "diagnostic age tick consumed queued edge");
+    // Capacity 31; dropped edges still count raw and update last raw age.
+    for (unsigned i = 0; i < 40U; ++i) edgeAfter(500U);
+    clockUs += 25U;
+    d = tach.diagnostics(clockUs);
+    check(d.rawEdges == 48U && d.overflowDrops == 9U && d.lastEdgeAgeUs == 25U,
+          "overflow raw evidence incorrect");
+    check(d.filterRejects == 2U, "snapshot consumed overflow");
+    expectInvalid(tach);
+    check(tach.diagnostics(clockUs).filterRejects == 3U, "overflow batch not counted once");
+    expectInvalid(tach);
+    check(tach.diagnostics(clockUs).filterRejects == 3U, "repeat read counted overflow twice");
+    train(tach, 20000U);
+    expectRpm(tach, 1500U, 1U);
+    return;
+  }
   edgeAfter(0U);
   expectInvalid(tach);
   if (name == "acquisition" || name == "zero") {
@@ -152,9 +224,12 @@ void test(const std::string& name) {
       train(tach, 20000U);
       expectRpm(tach, 1500U);
     } else if (name == "queued_stale") {
+      const auto previousRejects = tach.diagnostics(clockUs).filterRejects;
       for (unsigned i = 0; i < 8; ++i) edgeAfter(20000U);
       clockUs += timeoutUs;
       expectInvalid(tach);
+      check(tach.diagnostics(clockUs).filterRejects == previousRejects + 8U,
+            "stale queued edges not counted");
       train(tach, 20000U);
       expectRpm(tach, 1500U);
     } else if (name == "queue_capacity") {
@@ -170,6 +245,7 @@ void test(const std::string& name) {
       train(tach, 20000U);
       expectRpm(tach, 1500U);
     } else if (name == "recurring_noise") {
+      const auto beforeNoise = tach.diagnostics(clockUs);
       for (unsigned i = 0; i < 60U; ++i) {
         for (const auto interval : {5000U, 15000U}) {
           edgeAfter(interval);
@@ -179,6 +255,10 @@ void test(const std::string& name) {
         }
       }
       expectInvalid(tach);
+      const auto afterNoise = tach.diagnostics(clockUs);
+      check(afterNoise.rawEdges == beforeNoise.rawEdges + 120U &&
+            afterNoise.filterRejects > beforeNoise.filterRejects,
+            "consensus rejected windows not counted");
       train(tach, 20000U);
       expectRpm(tach, 1500U);
     } else {

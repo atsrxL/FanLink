@@ -1,5 +1,29 @@
 # Architecture decision log
 
+## ADR-026 — Invalid storage uses validated firmware defaults
+
+2026-09-08 user requests removal of the settings Safe mode after RX1 remained
+radio-online but could not drive PWM or report Tach. Invalid or unreadable
+persistent storage now selects the validated compiled pin mode and power, not
+disabled pins and minimum power. RX01 defaults PWMSWAP; RX2 UART builds default
+UART. Valid saved settings still override these defaults. Never use a different
+node/board/network record or implicitly write Flash on boot/Query.
+
+Keep flags bit1 as an invalid-storage diagnostic: with valid modes0..2 it means
+operating on compiled defaults until an explicit successful setting save. Legacy
+mode254 remains decodeable for explicit repair of installed old images, not an
+operating fallback for bad storage. Invalid compiled configuration still fails
+closed; it must not drive arbitrary pins or accept mutations.
+
+C6 accepts a validated fallback Query with an explicit warning and permits an
+explicit mode save, including selecting the same default mode. A legacy254 Query
+may authorize explicit repair without claiming a valid current mode. Preserve
+identity/capability/session checks, ACK plus post-reboot Query, and no automatic
+Set retries. This supersedes the corrupt-storage pin-disable rule in ADR-023.
+Host/RF500ms watchdogs, startup/maintenance full speed, CRC checks and hardware
+overtemperature protection are unchanged. Correct node/variant and external
+wiring remain essential: fallback is not automatic wiring discovery.
+
 ## ADR-025 — Native eight-slot Host v2, no legacy channel adapter
 
 2026-09-08 user explicitly requests eight-slot framing and removal of redundant
@@ -435,3 +459,25 @@ Only a directly connected exclusive TX Host serial port is the initial uploader
 entry; the existing C6 bridge does not yet forward OTA commands. Do not alter C6
 or silently stop any active serial owner. No physical write is authorized by
 this development and compilation request.
+# ADR-027 — Read-only RX tach diagnostics (2026-09-11)
+
+User requests raw falling-edge count, accepted estimator-period count, filter
+rejection count and raw last-edge age to distinguish missing pulses from rejected
+pulses. Add a separate fixed30-byte RF diagnostic request/reply (0x42/0x43),
+relayed by Host v2 types0x16/0x94. Do not repurpose Control/RPM reserved bytes,
+change existing packet versions, change tach filtering or add unsolicited RX
+transmissions. Snapshots never clear counters, reset sampling, persist settings
+or reboot. Existing OTA/settings ownership, strict identities and bounded radio
+timeouts must be preserved. Detailed wire layout and acquisition disturbance
+are specified in PROTOCOL.md after implementation review.
+
+Counters saturate at32 bits since boot; raw edges include queue overflow.
+Valid periods mean newly accepted estimator updates (not repeated reads).
+Rejects exclude warmup and count rejected processing decisions. Raw age is
+independent of filter acceptance; wire milliseconds saturate65534 and65535
+means no edge observed. Disabled UART-mode tach must be explicit, not misread
+as disconnected wire. ISR work remains constant-time.
+
+This turn only changes/tests/builds code. No hardware connection, restart, pin
+mode mutation or deployment is authorized. Deployment necessarily replaces
+current RAM evidence; this candidate can diagnose subsequent reproduction only.

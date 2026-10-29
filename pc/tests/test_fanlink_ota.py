@@ -496,6 +496,111 @@ class FastTransferTests(unittest.TestCase):
         self.assertAlmostEqual(times[2]-times[1], 100/5120)
 
 
+class AttemptStatsTests(unittest.TestCase):
+    def test_timeout_then_ack_stats_and_frame_identity(self):
+        events = []
+        serial = FakeReceiverSerial(drop_first=True)
+        host = uploader(serial, mode="fast", sleep=lambda _: None, observer=events.append)
+        host.upload()
+        self.assertTrue(host.committed)
+        self.assertEqual(len(events), len(serial.writes))
+        self.assertEqual(host.stats["attempts"], len(events))
+        for first, second in zip(events[::2], events[1::2]):
+            self.assertEqual((first["outcome"], second["outcome"]), ("timeout", "ack"))
+            self.assertEqual((first["attempt"], second["attempt"]), (1, 2))
+            self.assertEqual(first["sequence"], second["sequence"])
+            self.assertIsNone(first["status"])
+            self.assertIsNone(first["ack_offset"])
+            self.assertGreater(first["rtt"], 0)
+            self.assertGreaterEqual(second["elapsed"], first["elapsed"])
+        self.assertEqual(host.stats["timeouts"], host.stats["retries"])
+        self.assertEqual(host.stats["acks"], len(events) // 2)
+        self.assertEqual(host.stats["bad_offsets"], 0)
+        block = next(event for event in events if event["operation"] == "BLOCK_FINISH")
+        self.assertEqual((block["offset"], block["block_offset"], block["expected_offset"]), (100, 0, 100))
+
+    def test_recoverable_nack_is_not_timeout_and_records_partial_offset(self):
+        events = []
+        for nack_offset in (0, 10, 100):
+            events.clear()
+            injected = False
+            def mutate(frame, ack):
+                nonlocal injected
+                if frame.message_type == ota.HOST_FAST_REQUEST and not injected:
+                    injected = True
+                    changed = bytearray(ack)
+                    changed[18] = 3
+                    struct.pack_into("<I", changed, 14, nack_offset)
+                    struct.pack_into("<H", changed, 28, crc16_ccitt_false(changed[:28]))
+                    ack = bytes(changed)
+                return encode_frame(ota.HOST_REPLY, frame.sequence, ack)
+            host = uploader(FakeReceiverSerial(mutation=mutate), mode="fast",
+                            sleep=lambda _: None, observer=events.append)
+            host.upload()
+            self.assertEqual((host.stats["bad_offsets"], host.stats["timeouts"], host.stats["retries"]), (1, 0, 1))
+            nack = next(event for event in events if event["outcome"] == "bad_offset")
+            self.assertEqual((nack["status"], nack["ack_offset"], nack["block_offset"]), (3, nack_offset, 0))
+
+    def test_observer_errors_and_mutation_cannot_break_commit_or_stats(self):
+        def observer(event):
+            event["stats"]["acks"] = -1
+            raise OSError("log full")
+        host = uploader(FakeReceiverSerial(), observer=observer)
+        host.upload()
+        self.assertTrue(host.committed)
+        self.assertTrue(host.commit_sent)
+        stats = host.stats
+        self.assertEqual(stats["observer_errors"], stats["attempts"])
+        self.assertEqual(stats["acks"], stats["attempts"])
+        stats["acks"] = -1
+        self.assertGreater(host.stats["acks"], 0)
+
+    def test_progress_abort_still_prevents_finish_commit(self):
+        events = []
+        def stop(done, size):
+            raise FanLinkError("probe gate")
+        serial = FakeReceiverSerial()
+        host = uploader(serial, progress=stop, observer=events.append)
+        with self.assertRaisesRegex(FanLinkError, "probe gate"):
+            host.upload()
+        self.assertFalse(host.commit_sent)
+        self.assertEqual(events[-1]["operation"], "ABORT")
+        self.assertNotIn(ota.Op.FINISH, [frame.payload[13] for frame in serial.writes])
+
+    def test_rejection_short_write_and_commit_timeout_are_recorded(self):
+        events = []
+        host = uploader(FakeReceiverSerial(fail_op=ota.Op.DATA), observer=events.append)
+        with self.assertRaises(FanLinkError):
+            host.upload()
+        self.assertEqual(host.stats["rejections"], 1)
+        self.assertTrue(any(event["outcome"] == "rejected" for event in events))
+        serial = FakeReceiverSerial()
+        serial.write = lambda data: 0
+        host = uploader(serial)
+        with self.assertRaisesRegex(FanLinkError, "short serial write"):
+            host.upload()
+        self.assertEqual((host.stats["attempts"], host.stats["io_errors"]), (2, 2))
+        events.clear()
+        host = uploader(FakeReceiverSerial(commit_loss=True), observer=events.append)
+        with self.assertRaisesRegex(FanLinkError, "COMMIT.*no matching"):
+            host.upload()
+        self.assertTrue(host.commit_sent)
+        self.assertFalse(host.committed)
+        self.assertEqual([event["outcome"] for event in events[-2:]], ["timeout", "timeout"])
+        self.assertNotIn("ABORT", [event["operation"] for event in events])
+
+    def test_invalid_and_unmatched_acks_count_without_acceptance(self):
+        def mutate(frame, ack):
+            return (encode_frame(ota.HOST_REPLY, frame.sequence, ack[:-1]) +
+                    encode_frame(ota.HOST_REPLY, (frame.sequence + 1) & 65535, ack) +
+                    encode_frame(ota.HOST_REPLY, frame.sequence, ack))
+        host = uploader(FakeReceiverSerial(mutation=mutate))
+        host.upload()
+        self.assertEqual(host.stats["invalid_acks"], host.stats["acks"])
+        self.assertEqual(host.stats["ignored_frames"], host.stats["acks"])
+        self.assertEqual(host.stats["parsed_frames"], host.stats["acks"] * 3)
+
+
 class SerialTests(unittest.TestCase):
     def test_lazy_open_sets_control_lines_before_open_and_exclusive(self):
         events = []

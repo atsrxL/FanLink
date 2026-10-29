@@ -1,4 +1,110 @@
-# 2026-09-08 当前优先状态：原生8槽 Host v2候选，未部署
+# 2026-09-11 RX1 legacy升级成功，测速诊断发现大量异常边沿
+
+311664B/1651.331s，FINISH与COMMIT明确ACK，整次6次超时重试，无BadOffset。
+重启后Query确认pwmswap/+13/flags0。新诊断3次raw304272→409270→506645，
+valid0，reject18→32→44，age0/9/7ms；约61k原始ISR下降沿/秒，非正常风扇测速。
+不是无输入，但尚不能区分噪声/异常信号/引脚线路/中断配置原因。
+透传已关闭，35s恢复验收通过，连接全部释放。TX未重复刷写/模式功率未改。
+证据docs/evidence/20260911-rx1-legacy.md。以下失败记录为历史，RX1现已升级。
+
+## 2026-09-11 允许慢传后再试：RX1未提交失败，已恢复
+
+取消低速门槛后持续1214.748s，113500B(36.42%)确认；下一块2次BadOffset
+加10次超时耗尽12次尝试。未Finish/Commit，Abort明确ACK成功。透传false、
+RX1online/miss0/PWM100/RPM0/pwmswap/QueryConfirmed，全部连接已释放。
+TX未重复刷写，RX1仍旧应用。证据docs/evidence/20260911-rx1-slow.md。
+
+## 2026-09-11 RX1带统计重试：10KB门槛主动取消，恢复正常
+
+仅PC上传器增加逐次ACK/BadOffset/timeout/RTT统计，OTA36/TX12测试通过。
+RX1短窗口10000B/115.365s约86.7B/s，100块307次发送、101缺片回复、
+106超时、无首发成功；超时耗87.22s。达到低速/高重试门槛后主动Abort，
+收到明确ACK，未Finish/Commit/重启。TX未重复刷写。
+35s恢复确认透传false/RX1online/PWM100/RPM0/pwmswap/QueryConfirmed/miss0，
+全部连接释放。RF丢失还是FIFO/rearm时序尚未区分，不能宣称根因修复。
+证据docs/evidence/20260911-rx1-probe.md。未提交推送。
+
+## 2026-09-11 部署：TX成功，RX1空中升级未提交失败
+
+用户授权C6透传先TX后RX1。TX316672B、225.617s收到CommitACK，重启uptime7s
+及RX1查询确认通过，保留+13/flags0。RX1传输约92-95B/s，73000B(~23%)后
+BLOCK_FINISH连续12次无匹配ACK，829.48s失败，commit_sent=false。未盲目重试。
+已退出透传并35s恢复验收：RX1online/pwmswap/QueryConfirmed/PWM100/RPM0/miss0；
+TCP/API全部释放。RX1仍旧应用，无新测速计数；TX新镜像已部署。
+证据docs/evidence/20260911-tach-deploy.md。未切引脚/改功率，未提交推送。
+
+## 2026-09-11 测速诊断候选构建（随后仅TX部署）
+
+用户确认风扇实际旋转，要求新增原始边沿/有效估计/滤波拒绝/最后边沿年龄
+诊断。ADR-027新增独立RF0x42/43、Host0x16/94，只读查询不重启、不改模式、
+不写配置、不刷新控制watchdog；现有Control/RPM/STATUS布局与滤波不变。
+加入PC读取工具、严格匹配/超时/安全回归及平台计数测试。完整make verify
+通过；TX/RX1/RX8/RX2UART四目标真实clean编译通过，SHA清单校验全部OK。
+批次firmware/dist/20260911-tach-diagnostics；TX316672B，RX各311664B。
+本轮未连接设备、未切换引脚、未OTA；不能从新代码推断当前故障原因。
+说明：docs/TACH_DIAGNOSTICS.md；证据docs/evidence/20260911-tach-diagnostics.md。
+
+## 2026-09-08 无效设置回退修复：代码及四目标构建通过，C6已OTA
+
+ADR-026取消旧/损坏/不可读EEPROM引发的运行Safe停用模式，使用已验证的
+编译默认模式和功率；有效保存值保留，不自动写Flash。invalid标志仅提示
+使用默认值，显式设置后可持久化。错误编译配置的拒绝运行保护、失联全速、
+watchdog和OTA校验保留。C6支持旧Safe254恢复和默认值持久化，修复设置死锁。
+make verify与TX/RX1/RX8/RX2UART四目标clean构建通过；批次
+`firmware/dist/20260908-settings-fallback`。C6已正常OTA并45秒API复核，
+新构建09:15:02UTC。RX1空中升级310272B、1020.184秒Commit ACK成功；
+重启后Query确认pwmswap/+13dBm/flags2，新默认回退已生效。C6单次显式
+同模式持久化45秒Query确认通过，RPM已恢复上报约1572；最终原始Query
+确认pwmswap/+13/flags0，透传false、无维护连接。恢复后收到新的43%请求，
+最终Applied43.1373/RPM838/misses0；未覆盖该外部请求。末次helper的100%
+断言因此失败，不是升级失败。设置重启期间曾有一次TX状态超时后自动恢复，
+仍有sequence_gap/RF诊断，不能宣称全部无线问题消失。
+TX/RX2/RX8本批仅编译，未刷写。RX2当前离线，未改UART定义。
+射频CRC根因未解决，实体风扇控制仍待修复后验收。
+证据：`docs/evidence/20260908-settings-fallback.md`。未提交/推送。
+
+## 此前RX1 ACM0 ROM刷写成功，仍停留BOOT（历史）
+
+用户最新确认ACM0=RX1、ACM1=RX2；本次仅操作RX1。写入同批
+fanlink_rx_node01.bin（310256字节，SHA256
+ddb250bc8c4342b4c3ad28ea8ccef1fcdc52da3a7f17da869ac7e78de062fb26）。
+ROM报告补齐写入310272字节、36.3秒、exit0；不预读/读回Flash，不自动复位。
+独立确认ACM0已释放、bridge running0。需移除BOOT短接并重新上电，
+应用运行、保存设置及无线回传尚未验收。RX2本次未操作。
+日志：build/20260908-all8-rx1-rom.log。
+
+## 此前RX2 ROM尝试：连接失败，未擦写
+
+用户授权ACM1手动BOOT直写同批RX2 UART镜像。首次被旧USB路径守卫拦截，
+未打开远端UART；只读核实新拓扑后重试，ROM同步返回Invalid head0x52/exit2，
+未进入擦除或写入。无Flash预读/读回/复位；ACM1已释放、bridge0。
+需用户重新确认BOOT/串口接线；此前OTA证据保留，当前应用运行未重新验收。
+日志：build/20260908-all8-rx2-rom-retry1.log。
+
+## 此前：全8节点构建通过，TX/RX2/C6 OTA完成
+
+真实clean构建覆盖TX、RX01..RX08、RX2 UART共10目标，make verify通过；
+批次`firmware/dist/20260908-all8-upgrade`，10项大小/SHA及验收边界见
+`docs/evidence/20260908-all8-upgrade.md`。其他7台RX不可达，仅构建未刷写。
+
+RX2 RF OTA310256字节，380.205s收到Commit ACK；35秒恢复及额外8秒复核
+通过，末段新鲜状态快照33/32（不是独立RF包数），parser拒包0。Query确认
+Lite profile1/UART0/+13dBm/flags0。未直接验证RX uptime复位或Flash读回；
+证据仅支持完整传输Commit ACK、短时恢复和配置保留，不是实体风扇验收。
+RX操作后双UART经fuser确认释放、bridge running0；不代表后续TX操作状态。
+
+TX UART OTA315472字节，115.413s收到Commit ACK；35秒后uptime由5466降至32，
+Host v2/STATUS54及单调检查通过，tail32新鲜快照；额外8秒uptime40/tail32。
+双Query v2确认TX Lite13/flags0、RX2 UART13/flags0，8节点/125ms/5120Bps。
+158.506s升级恢复通过，161.511s relay关闭；独立再次确认双UART释放/bridge0。
+生产C6 compact8/pinmode已OTA完成，新编译2026-09-08 07:12:24 UTC，
+45秒API连接观察通过；真实HA注册与状态确认8个启用的config select，
+每个都有uart/pwm/pwmswap，另有8个启用的设置状态sensor。
+当前C6全部Connected=false、模式unknown，尚未收到在线RX Query；
+C6↔TX物理连接及端到端设置验收待用户接线确认，本轮未切引脚/功率。
+RF CRC根因与长期/物理安全验收仍未解决；本轮未提交或推送。
+
+## 前次原生8槽 Host v2源码候选（历史，以下未部署指该次工作）
 
 用户要求去掉16槽封装和冗余代码。当前源码Host全部外层帧版本2，
 SET_ALL=8、STATUS=54、METRICS=16；TX/PC/C6均移除16槽数组、补位和截断。

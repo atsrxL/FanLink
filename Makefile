@@ -48,7 +48,11 @@ radio-trace-test:
 	bash firmware/tools/run_radio_trace_tests.sh
 	$(PYTHON) -m unittest discover -s pc/tests -p 'test_fanlink_trace.py' -v
 
-verify: radio-trace-test diagnostic-scheduler-test settings-test ota-test test recovery-test fan-output-test tachometer-test reply-timing-test panel-test selftest
+tach-diagnostic-test:
+	bash firmware/tools/run_tach_diagnostic_tests.sh
+	$(PYTHON) -m unittest discover -s pc/tests -p 'test_fanlink_tach.py' -v
+
+verify: tach-diagnostic-test radio-trace-test diagnostic-scheduler-test settings-test ota-test test recovery-test fan-output-test tachometer-test reply-timing-test panel-test selftest
 	bash firmware/tools/run_rx_uart_diagnostic_tests.sh
 	./firmware/tools/run_firmware_syntax_smoke.sh
 	./scripts/source_manifest.sh --check

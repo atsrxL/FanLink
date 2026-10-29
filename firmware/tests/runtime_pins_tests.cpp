@@ -38,6 +38,11 @@ int main(int argc, char** argv) {
   }
   fan.setFullSpeed(); assert(fan.appliedDuty() == 255);
   assert(!tach.sample(0).valid);
+  const auto diagnostic = tach.diagnostics(0);
+  assert(diagnostic.enabled == (expectedTach >= 0));
+  assert(diagnostic.rawEdges == 0 && diagnostic.validPeriods == 0 &&
+         diagnostic.filterRejects == 0 && diagnostic.overflowDrops == 0 &&
+         diagnostic.lastEdgeAgeUs == UINT32_MAX);
   if (expectedPwm < 0) assert(pinCalls == 0 && pwmCalls == 0 && tachCalls == 0);
   else assert(pinCalls == 2 && pwmCalls == 257 && tachCalls == 1);
   std::cout << "PASS: runtime pin mode " << modeValue << " polarity " << polarity << '\n';

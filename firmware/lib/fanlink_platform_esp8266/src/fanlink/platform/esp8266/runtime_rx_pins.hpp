@@ -39,6 +39,9 @@ class RuntimeTachometer final : public ITachometer {
     return !tach_ || tach_->begin();
   }
   TachSample sample(std::uint32_t now) override { return tach_ ? tach_->sample(now) : TachSample{}; }
+  TachDiagnostics diagnostics(std::uint32_t now) override {
+    return tach_ ? tach_->diagnostics(now) : TachDiagnostics{};
+  }
  private:
   Esp8266Tachometer pwm_, swapped_;
   ITachometer* tach_{nullptr};

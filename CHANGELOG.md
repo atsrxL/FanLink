@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-09-11 — OTA attempt instrumentation
+
+- Optional PC uploader observer reports per-attempt RTT, ACK/BadOffset/timeout,
+  offsets and cumulative retry counters; no retry, pacing or wire change.
+- Observer exceptions cannot disrupt Commit accounting; progress cancellation
+  retains pre-Commit Abort. OTA36 and TX12 tests pass.
+- RX1-only bounded retry is separately recorded in deployment evidence.
+
+## 2026-09-11 — Read-only RX tach diagnostics (ADR-027, not deployed)
+
+- Add lifetime raw-edge, accepted-estimator and rejection counters plus raw-edge
+  age; instrument without changing the RPM filter or clearing state on queries.
+- Add separate fixed30B diagnostic RF types0x42/0x43 and Host v2 types0x16/0x94,
+  bounded exclusive query transport and a PC reader. Control/RPM layout unchanged.
+- No device restart, mode change, configuration write or firmware deployment.
+  Candidate build/test results recorded in the new evidence and handoff entry.
+
+## 2026-09-08 — Settings default fallback and C6 repair (ADR-026)
+
+- Replace invalid-storage pin-disable/minimum-power behavior with validated
+  compiled pin/power defaults; preserve valid saved selections and watchdogs.
+- Keep invalid-record diagnostics and explicit persistence; no boot/Query writes.
+- C6 distinguishes fallback from persisted settings and permits explicit repair,
+  including same-mode saves and legacy Safe254 recovery. Wire layouts unchanged.
+- Verification, build and deployment evidence recorded separately; source edits
+  alone do not repair the currently installed RX image or saved configuration.
+
+## 2026-09-08 — All-eight RX build coverage and coordinated upgrade
+
+- Verify and clean-build TX, RX01..RX08 and RX2 UART (ten environments).
+  Seven unreachable RX devices receive build artifacts only, not deployment.
+- RX2 RF OTA receives Commit ACK and passes short telemetry/settings recovery
+  checks; fresh status snapshots are not independent RF packet counts. No
+  direct RX uptime-reset or Flash-readback verification is claimed.
+- TX UART OTA receives Commit ACK and passes35s plus8s Host v2/STATUS54,
+  uptime-restart and retained-settings recovery checks. The separate production
+  C6 compact8/pinmode OTA completed; actual API and HA confirm eight enabled
+  uart/pwm/pwmswap selects and eight settings-status sensors. C6-to-TX physical
+  connection and end-to-end RX Query remain unverified; no mode was changed.
+- Preserve RF/wire/watchdog policy; no RF CRC fix or physical fan-safety claim.
+  Evidence and artifact hashes: `docs/evidence/20260908-all8-upgrade.md`.
+
 ## 2026-09-08 — Native compact8 Host v2 (ADR-025)
 
 - Replace ADR-023's legacy Host envelope with exactly eight slots: all outer

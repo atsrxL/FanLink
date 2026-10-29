@@ -5,6 +5,16 @@
 #include <limits>
 
 namespace fanlink::platform::esp8266 {
+namespace {
+void increment(std::uint32_t& counter) {
+  if (counter != UINT32_MAX) ++counter;
+}
+std::uint32_t addAge(std::uint32_t age, std::uint32_t elapsed) {
+  if (age == UINT32_MAX) return age;
+  constexpr auto maximum = UINT32_MAX - 1U;
+  return elapsed >= maximum - age ? maximum : age + elapsed;
+}
+}  // namespace
 
 Esp8266Tachometer* Esp8266Tachometer::instance_ = nullptr;
 
@@ -35,12 +45,17 @@ void IRAM_ATTR Esp8266Tachometer::interruptThunk() {
 }
 
 void IRAM_ATTR Esp8266Tachometer::onFallingEdge() {
+  const auto edgeUs = ::micros();
+  if (rawEdges_ != UINT32_MAX) ++rawEdges_;
+  latestRawEdgeUs_ = edgeUs;
+  rawEdgePending_ = true;
   const auto next = static_cast<std::uint8_t>((writeIndex_ + 1U) & (kQueueSize - 1U));
   if (next == readIndex_) {
     overflow_ = true;
+    if (overflowDrops_ != UINT32_MAX) ++overflowDrops_;
     return;
   }
-  edges_[writeIndex_] = ::micros();
+  edges_[writeIndex_] = edgeUs;
   writeIndex_ = next;
 }
 
@@ -60,6 +75,7 @@ void Esp8266Tachometer::processEdge(std::uint32_t edgeUs) {
   // Test consecutive RAW edges too: a high-frequency noise train must not
   // accumulate into a plausible period merely by skipping alternate edges.
   if (shortEdge) {
+    increment(filterRejects_);
     return;
   }
   if (haveEstimate_ &&
@@ -74,6 +90,7 @@ void Esp8266Tachometer::processEdge(std::uint32_t edgeUs) {
     return;
   }
   if (period < minimumPeriodUs_) {
+    increment(filterRejects_);
     return;
   }
   anchorUs_ = edgeUs;
@@ -106,16 +123,19 @@ void Esp8266Tachometer::processEdge(std::uint32_t edgeUs) {
   // Four of five periods must agree. A bare majority would incorrectly lock
   // onto one half of a recurring split pulse (e.g. alternating 5/15 ms).
   if (count < 4U || period < low || period > high) {
+    increment(filterRejects_);
     return;
   }
   const auto calculated = (60000000ULL * count) / (sum * pulsesPerRevolution_);
   if (calculated == 0U || calculated > maximumRpm_ ||
       calculated > std::numeric_limits<std::uint16_t>::max()) {
+    increment(filterRejects_);
     return;
   }
   rpm_ = static_cast<std::uint16_t>(calculated);
   lastTrustedEdgeUs_ = edgeUs;
   haveEstimate_ = true;
+  increment(validPeriods_);
 }
 
 TachSample Esp8266Tachometer::sample(std::uint32_t nowUs) {
@@ -136,8 +156,15 @@ TachSample Esp8266Tachometer::sample(std::uint32_t nowUs) {
   }
   overflow_ = false;
   const auto sampledNowUs = ::micros();
+  rawAgeUs_ = rawEdgePending_
+      ? addAge(0U, static_cast<std::uint32_t>(sampledNowUs - latestRawEdgeUs_))
+      : addAge(rawAgeUs_, static_cast<std::uint32_t>(sampledNowUs - rawAgeClockUs_));
+  rawAgeClockUs_ = sampledNowUs;
+  rawEdgePending_ = false;
   interrupts();
   if (overflow) {
+    // One rejected batch/window; actual lost ISR edges counted separately.
+    increment(filterRejects_);
     // Unknown missing edges must not be treated as a lower real fan speed.
     resetEstimate();
     haveRawEdge_ = false;
@@ -145,6 +172,7 @@ TachSample Esp8266Tachometer::sample(std::uint32_t nowUs) {
   }
   for (std::uint8_t i = 0U; i < count; ++i) {
     if (static_cast<std::uint32_t>(sampledNowUs - pending[i]) >= timeoutUs_) {
+      increment(filterRejects_);
       resetEstimate();
       haveRawEdge_ = false;
       continue;
@@ -159,6 +187,23 @@ TachSample Esp8266Tachometer::sample(std::uint32_t nowUs) {
     return {};
   }
   return TachSample{rpm_, true};
+}
+
+TachDiagnostics Esp8266Tachometer::diagnostics(std::uint32_t nowUs) {
+  if (!initialized_) return {};
+  (void)nowUs;  // Caller time may precede an ISR; use a coherent fresh snapshot.
+  noInterrupts();
+  const auto currentUs = ::micros();
+  const auto raw = rawEdges_;
+  const auto dropped = overflowDrops_;
+  rawAgeUs_ = rawEdgePending_
+      ? addAge(0U, static_cast<std::uint32_t>(currentUs - latestRawEdgeUs_))
+      : addAge(rawAgeUs_, static_cast<std::uint32_t>(currentUs - rawAgeClockUs_));
+  rawAgeClockUs_ = currentUs;
+  rawEdgePending_ = false;
+  const auto age = rawAgeUs_;
+  interrupts();
+  return TachDiagnostics{raw, validPeriods_, filterRejects_, age, dropped, true};
 }
 
 }  // namespace fanlink::platform::esp8266

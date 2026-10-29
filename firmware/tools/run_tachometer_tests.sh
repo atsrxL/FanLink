@@ -16,7 +16,7 @@ fi
   -o "$tach_test_dir/tachometer_tests"
 # Fresh process per scenario: production supports exactly one attached tach ISR.
 tach_failed=0
-for tach_case in stable1400 stable1500 isolated500 isolated5000 burst missing step stop noise_age restart zero wrap stalled_loop acquisition queued_stale queue_capacity max_speed config recurring_noise; do
+for tach_case in stable1400 stable1500 isolated500 isolated5000 burst missing step stop noise_age restart zero wrap stalled_loop acquisition queued_stale queue_capacity max_speed config recurring_noise diagnostics; do
   if ! "$tach_test_dir/tachometer_tests" "$tach_case"; then tach_failed=1; fi
 done
 exit "$tach_failed"

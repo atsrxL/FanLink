@@ -154,7 +154,7 @@ def describe(reply: Reply) -> None:
     print(f"node={reply.node} profile={PROFILES[reply.profile]} mode={mode} "
           f"chip_power={reply.power} dBm allowed_chip_dBm={allowed_power(reply.profile)} "
           f"capabilities=0x{reply.capabilities:02X} pending={bool(reply.flags & 1)} "
-          f"safe_record={bool(reply.flags & 2)} OTA_cap={reply.ota_rate} B/s "
+          f"invalid_record={bool(reply.flags & 2)} OTA_cap={reply.ota_rate} B/s "
           f"receivers={reply.receivers} poll={reply.period_ms} ms", flush=True)
     if reply.profile == 2:
         print("Nano -10/-6/-3/1 dBm are nominal board 10/25/50/100 mW levels, not measured output.")

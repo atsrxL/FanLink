@@ -320,7 +320,8 @@ void RxController::runOnce() {
     const bool wasActive = maintenance_->active();
     const bool consumed = maintenance_->handle(buffer.data(), result.length,
         reply.data(), replyLength, nowMs);
-    if (wasActive || maintenance_->active() || replyLength > 0) enterLinkFailsafe();
+    if (wasActive || maintenance_->active() ||
+        (replyLength > 0 && maintenance_->replyRequiresFullSpeed())) enterLinkFailsafe();
     if (consumed) {
       if (replyLength == reply.size()) {
         // OTA flash work may exceed the control reply budget. TX grants a
