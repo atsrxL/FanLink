@@ -1,0 +1,47 @@
+diff --git a/src/html/src/pages/connections-panel.js b/src/html/src/pages/connections-panel.js
+--- a/src/html/src/pages/connections-panel.js
++++ b/src/html/src/pages/connections-panel.js
+@@ -86 +86 @@ class ConnectionsPanel extends LitElement {
+-                        <li><b>Mode:</b> Output frequency, 10KHz 0-100% duty cycle, binary On/Off, DShot, Serial, or I2C
++                        <li><b>Mode:</b> Output frequency, 25KHz open-drain fan duty cycle, binary On/Off, DShot, Serial, or I2C
+@@ -173 +173 @@ class ConnectionsPanel extends LitElement {
+-            const modes = ['50Hz', '60Hz', '100Hz', '160Hz', '333Hz', '400Hz', '10KHzDuty', 'On/Off']
++            const modes = ['50Hz', '60Hz', '100Hz', '160Hz', '333Hz', '400Hz', '25KHzFan', 'On/Off']
+diff --git a/src/include/common.h b/src/include/common.h
+--- a/src/include/common.h
++++ b/src/include/common.h
+@@ -198 +198 @@ enum eServoOutputMode : uint8_t
+-    som10KHzDuty,   // 6:  10kHz duty
++    som10KHzDuty,   // 6:  custom 25kHz open-drain fan duty
+diff --git a/src/lib/ServoOutput/devServoOutput.cpp b/src/lib/ServoOutput/devServoOutput.cpp
+--- a/src/lib/ServoOutput/devServoOutput.cpp
++++ b/src/lib/ServoOutput/devServoOutput.cpp
+@@ -55 +55 @@ uint16_t servoOutputModeToFrequency(eServoOutputMode mode)
+-        return 10000U;
++        return 25000U;
+@@ -334,10 +334,18 @@ static int event()
+         for (int ch = 0; ch < GPIO_PIN_PWM_OUTPUTS_COUNT; ++ch)
+         {
+             const rx_config_pwm_t *chConfig = config.GetPwmChannel(ch);
+-            const auto frequency = servoOutputModeToFrequency((eServoOutputMode)chConfig->val.mode);
++            const auto mode = (eServoOutputMode)chConfig->val.mode;
++            const auto frequency = servoOutputModeToFrequency(mode);
+             if (frequency && servoPins[ch] != UNDEF_PIN)
+             {
+                 pwmChannels[ch] = PWM.allocate(servoPins[ch], frequency);
++#if defined(PLATFORM_ESP8266)
++                if (mode == som10KHzDuty && pwmChannels[ch] != -1)
++                {
++                    // A four-wire PC fan supplies the pull-up; HIGH releases the line.
++                    pinMode(servoPins[ch], OUTPUT_OPEN_DRAIN);
++                }
++#endif
+             }
+ #if defined(PLATFORM_ESP32)
+             else if ((eServoOutputMode)chConfig->val.mode == somDShot || (eServoOutputMode)chConfig->val.mode == somDShot3D)
+diff --git a/src/lib/rx-crsf/RXParameters.cpp b/src/lib/rx-crsf/RXParameters.cpp
+--- a/src/lib/rx-crsf/RXParameters.cpp
++++ b/src/lib/rx-crsf/RXParameters.cpp
+@@ -33 +33 @@
+-static char pwmModes[] = "50Hz;60Hz;100Hz;160Hz;333Hz;400Hz;10kHzDuty;On/Off;DShot;DShot 3D;Serial RX;Serial TX;I2C SCL;I2C SDA;Serial2 RX;Serial2 TX";
++static char pwmModes[] = "50Hz;60Hz;100Hz;160Hz;333Hz;400Hz;25kHzFan;On/Off;DShot;DShot 3D;Serial RX;Serial TX;I2C SCL;I2C SDA;Serial2 RX;Serial2 TX";

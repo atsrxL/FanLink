@@ -1,0 +1,19 @@
+{
+  "name": "elrs-lua-local-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local browser UI for configuring an ExpressLRS TX/RX over a CRSF serial link, mirroring the official ELRS Lua script protocol.",
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node test/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "serialport": "^13.0.0",
+    "ws": "^8.18.0"
+  }
+}

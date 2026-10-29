@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ExpressLRS Lua 串口控制台</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>ExpressLRS Lua 串口控制台</h1>
+        <p>本机 CRSF 主机 · 等价于 EdgeTX 中的 elrs.lua 界面</p>
+      </div>
+    </div>
+    <div class="top-right">
+      <div id="linkPills" class="pills" hidden></div>
+      <div class="conn">
+        <span id="connDot" class="dot" aria-hidden="true"></span>
+        <span id="connText">未连接</span>
+      </div>
+    </div>
+  </header>
+
+  <section class="serialbar" aria-label="串口连接">
+    <select id="portSelect" aria-label="串口设备"></select>
+    <span class="hint">波特率自动尝试 400000→115200→5250000→3750000→1870000→921600→2250000</span>
+    <span class="spacer"></span>
+    <button id="refreshPorts" class="ghost" type="button">刷新串口</button>
+    <button id="connectBtn" class="primary" type="button">连接</button>
+  </section>
+
+  <main>
+    <aside id="devicePanel" class="panel device-panel">
+      <h2>设备</h2>
+      <div id="deviceList" class="device-list">
+        <p class="empty">未连接</p>
+      </div>
+      <div id="linkBox" class="link-box" hidden></div>
+    </aside>
+
+    <section class="panel fields-panel" aria-label="ELRS 参数">
+      <div class="fields-head">
+        <div>
+          <h2 id="deviceTitle">等待设备</h2>
+          <div class="progress-row" hidden>
+            <progress id="progressBar" max="100" value="0"></progress>
+            <span id="progressText"></span>
+          </div>
+        </div>
+        <button id="reloadBtn" class="ghost" type="button" disabled>重新读取全部参数</button>
+      </div>
+      <div id="fieldTree" class="field-tree">
+        <p class="empty" id="fieldEmpty">连接并发现 ELRS 设备后，参数会显示在这里。</p>
+      </div>
+    </section>
+
+    <aside class="side-stack">
+      <section id="telemetryPanel" class="panel telemetry-panel" aria-label="CRSF Telemetry 回传">
+        <div class="telemetry-head">
+          <div>
+            <h2>Telemetry 回传</h2>
+            <p id="telemetryStatus" class="section-note">等待遥测帧</p>
+          </div>
+          <span id="telemetryRate" class="rate-badge">0 Hz</span>
+        </div>
+        <div id="telemetryCards" class="telemetry-cards">
+          <p class="empty">接收机与飞控回传的数据会显示在这里。</p>
+        </div>
+        <details class="raw-frames">
+          <summary>最近 CRSF 帧 <span id="telemetryCount">0</span></summary>
+          <div id="telemetryFrames" class="telemetry-frames"></div>
+        </details>
+      </section>
+
+      <section id="logPanel" class="panel log-panel">
+        <h2>活动日志</h2>
+        <div id="logList" class="log-list" aria-live="polite"></div>
+      </section>
+    </aside>
+
+    <section id="channelsPanel" class="panel channels-panel" aria-label="CRSF RC 通道控制">
+      <div class="channels-head">
+        <div>
+          <h2>全部 16 个 RC 通道</h2>
+          <p class="section-note">1000–2000 µs · 滑块可预设；只有明确启用后才会以 50 Hz 连续发送</p>
+        </div>
+        <div class="channel-actions">
+          <span id="channelStatus" class="channel-status">输出关闭</span>
+          <button id="safeChannels" class="ghost" type="button">安全初值</button>
+          <button id="centerChannels" class="ghost" type="button">全部居中</button>
+          <button id="channelOutput" class="danger" type="button" disabled>启用通道输出</button>
+        </div>
+      </div>
+      <div id="channelNotice" class="safety-notice">
+        输出默认关闭。安全初值为 CH1/2/4 居中、CH3 与 CH5–16 最低；启用前请移除桨叶并确认通道映射。
+      </div>
+      <div id="channelGrid" class="channel-grid"></div>
+    </section>
+  </main>
+
+  <footer>
+    参数写操作会直接修改模块配置；RC 输出会持续控制全部通道。服务只监听本机 127.0.0.1，页面或串口断开时自动停发。
+  </footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
